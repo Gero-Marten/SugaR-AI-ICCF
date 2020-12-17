@@ -244,7 +244,7 @@ const string engine_info(bool to_uci) {
   string month, day, year;
   stringstream ss, date(__DATE__); // From compiler, format is "Sep 21 2008"
 
-  ss << "SugaR AI ICCF 1.00 " << Version << setfill('0');
+  ss << "SugaR AI ICCF 1.10 " << Version << setfill('0');
 
   ss << (to_uci  ? "\nid author ": " by ")
      << "Stockfish Team, Marco Zerbinati, Khalid Omar";
