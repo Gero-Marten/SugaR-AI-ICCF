@@ -1,17 +1,17 @@
 /*
   SugaR, a UCI chess playing engine derived from Stockfish
   Copyright (C) 2004-2020 The Stockfish developers (see AUTHORS file)
-
+  
   SugaR is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
-
+  
   SugaR is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
-
+  
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
@@ -356,14 +356,24 @@ void PolyBook::init(const std::string& bookfile)
     }
 
     fseek(fpt, 0L, SEEK_END);
-    int filesize = ftell(fpt);
+    size_t filesize = (size_t)ftell(fpt);
     fseek(fpt, 0L, SEEK_SET);
 
     keycount = filesize / 16;
-    polyhash = new PolyHash[keycount];
+    polyhash = (PolyHash *)malloc(filesize);
 
-    fread(polyhash, 1, filesize, fpt);
+    size_t readSize = fread(polyhash, 1, filesize, fpt);
     fclose(fpt);
+
+    if (readSize != filesize)
+    {
+        free(polyhash);
+        polyhash = NULL;
+        enabled = false;
+
+        sync_cout << "info string Could not read " << bookfile << sync_endl;
+        return;
+    }
 
     for (int i = 0; i<keycount; i++)
         byteswap_polyhash(&polyhash[i]);

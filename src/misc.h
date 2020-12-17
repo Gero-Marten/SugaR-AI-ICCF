@@ -34,14 +34,20 @@ const std::string engine_info(bool to_uci = false);
 const std::string compiler_info();
 
 void show_logo();
-const std::string os_info();
-const std::string processor_brand();
-const std::string numa_nodes();
-const std::string physical_cores();
-const std::string logical_cores();
-const std::string is_hyper_threading();
-const std::string cache_size(int idx);
-const std::string total_memory();
+std::string format_bytes(uint64_t bytes, int decimals);
+
+namespace SysInfo
+{
+    void init();
+    const std::string os_info();
+    const std::string processor_brand();
+    const std::string numa_nodes();
+    const std::string physical_cores();
+    const std::string logical_cores();
+    const std::string is_hyper_threading();
+    const std::string cache_info(int idx);
+    const std::string total_memory();
+}
 
 void prefetch(void* addr);
 void prefetch2(void* addr);
@@ -65,7 +71,7 @@ inline TimePoint now() {
 
 template<class Entry, int Size>
 struct HashTable {
-  Entry* operator[](Key key) { return &table[key & (Size - 1)]; }
+  Entry* operator[](Key key) { return &table[(uint32_t)key & (Size - 1)]; }
 
 private:
   std::vector<Entry> table = std::vector<Entry>(Size); // Allocate on the heap
@@ -138,6 +144,19 @@ public:
   { return T(rand64() & rand64() & rand64()); }
 };
 
+inline uint64_t mul_hi64(uint64_t a, uint64_t b) {
+#if defined(__GNUC__) && defined(IS_64BIT)
+    __extension__ typedef unsigned __int128 uint128;
+    return ((uint128)a * (uint128)b) >> 64;
+#else
+    uint64_t aL = (uint32_t)a, aH = a >> 32;
+    uint64_t bL = (uint32_t)b, bH = b >> 32;
+    uint64_t c1 = (aL * bL) >> 32;
+    uint64_t c2 = aH * bL + c1;
+    uint64_t c3 = aL * bH + (uint32_t)c2;
+    return aH * bH + (c2 >> 32) + (c3 >> 32);
+#endif
+}
 
 /// Under Windows it is not possible for a process to run on more than one
 /// logical processor group. This usually means to be limited to use max 64

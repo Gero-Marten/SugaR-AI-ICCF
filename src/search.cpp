@@ -245,175 +245,178 @@ void MainThread::search() {
   {
       doNull = (bool)Options["NullMove"];
 
-      //Check polyglot books first
-      if ((bool)Options["OwnBook"] && !Limits.infinite && !Limits.mate)
+      if (!Limits.infinite && !Limits.mate)
       {
-          bookMove = polybook.probe(rootPos);
-          if (!bookMove)
-              bookMove = polybook2.probe(rootPos);
-      }
-
-      //Check experience book second
-      if (bookMove == MOVE_NONE && (bool)Options["Experience Book"] && rootPos.game_ply() / 2 < (int)Options["Experience Book Max Moves"])
-      {
-          const Experience::ExpEntryEx* expEx = Experience::probe(rootPos.key());
-
-          if (expEx)
+          //Check polyglot books first
+          if ((bool)Options["OwnBook"])
           {
-              const int experienceBookMovesAhead = 8;
+              bookMove = polybook.probe(rootPos);
+              if (!bookMove)
+                  bookMove = polybook2.probe(rootPos);
+          }
 
-              //Find expected score for all experience moves by playing the next 'experienceBookMovesAhead' moves
-              Color sideToMove = rootPos.side_to_move();
-              std::map<const Experience::ExpEntryEx*, Value> estimatedValue;
-              StateInfo st[experienceBookMovesAhead];
-              const Experience::ExpEntryEx* tempExpEx = expEx;
-              vector<const Experience::ExpEntryEx*> exp; //For undoing of exp moves
-              while (tempExpEx)
+          //Check experience book second
+          if (bookMove == MOVE_NONE && (bool)Options["Experience Book"] && rootPos.game_ply() / 2 < (int)Options["Experience Book Max Moves"])
+          {
+              const Experience::ExpEntryEx* expEx = Experience::probe(rootPos.key());
+
+              if (expEx)
               {
-                  //Start fresh
-                  exp.clear();
+                  const int experienceBookMovesAhead = 8;
 
-                  //Find the estimated value of the next 'experienceBookMovesAhead' moves
-                  int multiplier = 1;
-                  int64_t valueSum = 0;
-                  int64_t valueWeight = 0;
-                  bool drawDetected = false;
-                  const Experience::ExpEntryEx* nextPosExpEx = tempExpEx;
-                  while (nextPosExpEx && exp.size() < experienceBookMovesAhead)
+                  //Find expected score for all experience moves by playing the next 'experienceBookMovesAhead' moves
+                  Color sideToMove = rootPos.side_to_move();
+                  std::map<const Experience::ExpEntryEx*, Value> estimatedValue;
+                  StateInfo st[experienceBookMovesAhead];
+                  const Experience::ExpEntryEx* tempExpEx = expEx;
+                  vector<const Experience::ExpEntryEx*> exp; //For undoing of exp moves
+                  while (tempExpEx)
                   {
-                      //Add this exp
-                      valueSum += nextPosExpEx->value * nextPosExpEx->depth * multiplier * (rootPos.side_to_move() == sideToMove ? 1 : -1);
+                      //Start fresh
+                      exp.clear();
 
-                      //Adjust 'multiplierSum' and increase the multiplier
-                      valueWeight += nextPosExpEx->depth * multiplier;
-                      multiplier++;
-
-                      //Do the exp move and probe the next one
-                      exp.push_back(nextPosExpEx);
-                      rootPos.do_move(nextPosExpEx->move, st[exp.size() - 1]);
-                      if (rootPos.is_draw(rootPos.game_ply()))
+                      //Find the estimated value of the next 'experienceBookMovesAhead' moves
+                      int multiplier = 1;
+                      int64_t valueSum = 0;
+                      int64_t valueWeight = 0;
+                      bool drawDetected = false;
+                      const Experience::ExpEntryEx* nextPosExpEx = tempExpEx;
+                      while (nextPosExpEx && exp.size() < experienceBookMovesAhead)
                       {
-                          drawDetected = true;
-                          break;
+                          //Add this exp
+                          valueSum += nextPosExpEx->value * nextPosExpEx->depth * multiplier * (rootPos.side_to_move() == sideToMove ? 1 : -1);
+
+                          //Adjust 'multiplierSum' and increase the multiplier
+                          valueWeight += nextPosExpEx->depth * multiplier;
+                          multiplier++;
+
+                          //Do the exp move and probe the next one
+                          exp.push_back(nextPosExpEx);
+                          rootPos.do_move(nextPosExpEx->move, st[exp.size() - 1]);
+                          if (rootPos.is_draw(rootPos.game_ply()))
+                          {
+                              drawDetected = true;
+                              break;
+                          }
+
+                          nextPosExpEx = Experience::probe(rootPos.key());
                       }
 
-                      nextPosExpEx = Experience::probe(rootPos.key());
-                  }
+                      //Undo the moves
+                      for (auto it = exp.rbegin(); it != exp.rend(); ++it)
+                          rootPos.undo_move((*it)->move);
 
-                  //Undo the moves
-                  for (auto it = exp.rbegin(); it != exp.rend(); ++it)
-                      rootPos.undo_move((*it)->move);
+                      //Don't consider this experience move if a draw is detected
+                      if (drawDetected)
+                          continue;
 
-                  //Don't consider this experience move if a draw is detected
-                  if (drawDetected)
-                      continue;
+                      //Calculate estimated sum
+                      estimatedValue[tempExpEx] = Value(valueSum / valueWeight);
 
-                  //Calculate estimated sum
-                  estimatedValue[tempExpEx] = Value(valueSum / valueWeight);
+                      //Next
+                      tempExpEx = tempExpEx->next;
+                  };
 
-                  //Next
-                  tempExpEx = tempExpEx->next;
-              };
-
-              //Delegate to filter out drawing experience moves (the ones that are execluded earlier)
-              auto should_consider_exp_move = [&estimatedValue](const Experience::ExpEntryEx* ex)
-              {
-                  return estimatedValue.find(ex) != estimatedValue.end();
-              };
-
-              //Find best experience move (algorithm is similar to Thread::get_best_thread())
-              //Step 1: Find minimum score of all threads
-              Value minExpectedScore = VALUE_NONE;
-              tempExpEx = expEx;
-              while (tempExpEx)
-              {
-                  if (should_consider_exp_move(tempExpEx))
+                  //Delegate to filter out drawing experience moves (the ones that are execluded earlier)
+                  auto should_consider_exp_move = [&estimatedValue](const Experience::ExpEntryEx* ex)
                   {
-                      //Ignore this experience move if it is not present in the 'estimatedValue' map (which contains all the moves that enhance the score)
-                      minExpectedScore = std::min(minExpectedScore, estimatedValue[tempExpEx]);
-                  }
+                      return estimatedValue.find(ex) != estimatedValue.end();
+                  };
 
-                  //Next
-                  tempExpEx = tempExpEx->next;
-              };
-
-              //Step 2: Do the voting
-              map<const Experience::ExpEntryEx*, int64_t> votes;
-              vector<const Experience::ExpEntryEx*> allExpMoves;
-              tempExpEx = expEx;
-              while (tempExpEx)
-              {
-                  if (should_consider_exp_move(tempExpEx))
+                  //Find best experience move (algorithm is similar to Thread::get_best_thread())
+                  //Step 1: Find minimum score of all threads
+                  Value minExpectedScore = VALUE_NONE;
+                  tempExpEx = expEx;
+                  while (tempExpEx)
                   {
-                      allExpMoves.push_back(tempExpEx);
-                      votes[tempExpEx] += (estimatedValue[tempExpEx] - minExpectedScore + 14) * int(tempExpEx->depth);
+                      if (should_consider_exp_move(tempExpEx))
+                      {
+                          //Ignore this experience move if it is not present in the 'estimatedValue' map (which contains all the moves that enhance the score)
+                          minExpectedScore = std::min(minExpectedScore, estimatedValue[tempExpEx]);
+                      }
+
+                      //Next
+                      tempExpEx = tempExpEx->next;
+                  };
+
+                  //Step 2: Do the voting
+                  map<const Experience::ExpEntryEx*, int64_t> votes;
+                  vector<const Experience::ExpEntryEx*> allExpMoves;
+                  tempExpEx = expEx;
+                  while (tempExpEx)
+                  {
+                      if (should_consider_exp_move(tempExpEx))
+                      {
+                          allExpMoves.push_back(tempExpEx);
+                          votes[tempExpEx] += (estimatedValue[tempExpEx] - minExpectedScore + 14) * int(tempExpEx->depth);
+                      }
+
+                      //Next
+                      tempExpEx = tempExpEx->next;
                   }
 
-                  //Next
-                  tempExpEx = tempExpEx->next;
-              }
+                  //Remove all experience moves that are not good enough or drawing
+                  allExpMoves.erase(
+                      remove_if(
+                          allExpMoves.begin(),
+                          allExpMoves.end(),
+                          [&estimatedValue](const Experience::ExpEntryEx* ex)
+                          {
+                              return estimatedValue[ex] + PawnValueEg / 5 < ex->value;
+                          }),
+                      allExpMoves.end());
 
-              //Remove all experience moves that are not good enough or drawing
-              allExpMoves.erase(
-                  remove_if(
+                  //Sort remaining experience moves based on votes
+                  stable_sort(
                       allExpMoves.begin(),
                       allExpMoves.end(),
-                      [&estimatedValue](const Experience::ExpEntryEx* ex)
+                      [&votes](const Experience::ExpEntryEx* ex1, const Experience::ExpEntryEx* ex2)
                       {
-                          return estimatedValue[ex] + PawnValueEg / 5 < ex->value;
-                      }),
-                  allExpMoves.end());
+                          return votes[ex1] > votes[ex2];
+                      });
 
-              //Sort remaining experience moves based on votes
-              stable_sort(
-                  allExpMoves.begin(),
-                  allExpMoves.end(),
-                  [&votes](const Experience::ExpEntryEx* ex1, const Experience::ExpEntryEx* ex2)
+                  //Provide some info to the GUI
+                  for (auto it = allExpMoves.rbegin(); it != allExpMoves.rend(); ++it)
                   {
-                      return votes[ex1] > votes[ex2];
-                  });
+                      sync_cout
+                          << "info"
+                          << " depth " << (*it)->depth
+                          << " seldepth " << (*it)->depth
+                          << " multipv 1"
+                          << " score " << UCI::value((*it)->value, (*it)->value)
+                          << " nodes 0"
+                          << " nps 0"
+                          << " tbhits 0"
+                          << " time 0"
+                          << " pv " << UCI::move((*it)->move, rootPos.is_chess960())
+                          << sync_endl;
+                  }
 
-              //Provide some info to the GUI
-              for (auto it = allExpMoves.rbegin(); it != allExpMoves.rend(); ++it)
-              {
-                  sync_cout
-                      << "info"
-                      << " depth "    << (*it)->depth
-                      << " seldepth " << (*it)->depth
-                      << " multipv 1"
-                      << " score "    << UCI::value((*it)->value, (*it)->value)
-                      << " nodes 0"
-                      << " nps 0"
-                      << " tbhits 0"
-                      << " time 0"
-                      << " pv "       << UCI::move((*it)->move, rootPos.is_chess960())
-                      << sync_endl;
+                  //Apply 'Best Move'
+                  const Experience::ExpEntryEx* expBookMoveEx = nullptr;
+                  if (!(bool)Options["Experience Book Best Move"] && allExpMoves.size() > 1)
+                  {
+                      static auto randomEngine = std::default_random_engine(now());
+
+                      //Pick one of the top two moves
+                      expBookMoveEx = allExpMoves[randomEngine() % 2];
+                  }
+                  else
+                  {
+                      expBookMoveEx = allExpMoves.front();
+                  }
+
+                  //Assign the book move
+                  if (expBookMoveEx)
+                      bookMove = expBookMoveEx->move;
               }
-
-              //Apply 'Best Move'
-              const Experience::ExpEntryEx* expBookMoveEx = nullptr;
-              if (!(bool)Options["Experience Book Best Move"] && allExpMoves.size() > 1)
-              {
-                  static auto randomEngine = std::default_random_engine(now());
-
-                  //Pick one of the top two moves
-                  expBookMoveEx = allExpMoves[randomEngine() % 2];
-              }
-              else
-              {
-                  expBookMoveEx = allExpMoves.front();
-              }
-
-              //Assign the book move
-              if(expBookMoveEx)
-                  bookMove = expBookMoveEx->move;
           }
       }
 
       if (bookMove != MOVE_NONE && std::find(rootMoves.begin(), rootMoves.end(), bookMove) != rootMoves.end())
       {
-            for (Thread* th : Threads)
-                std::swap(th->rootMoves[0], *std::find(th->rootMoves.begin(), th->rootMoves.end(), bookMove));
+          for (Thread* th : Threads)
+              std::swap(th->rootMoves[0], *std::find(th->rootMoves.begin(), th->rootMoves.end(), bookMove));
       }
       else
       {

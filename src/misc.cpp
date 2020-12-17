@@ -50,6 +50,7 @@ typedef bool(WINAPI *fun3_t)(HANDLE, CONST GROUP_AFFINITY*, PGROUP_AFFINITY);
 #include <vector>
 #include <bitset>
 #include <cstdlib>
+#include <regex>
 
 #ifdef __GNUC__
 #include <sys/stat.h> //for stat()
@@ -230,7 +231,7 @@ namespace Utility
         //Assume game is not decided!
         return false;
     }
-};
+}
 
 /// engine_info() returns the full name of the current SugaR version. This
 /// will be either "SugaR <Tag> DD-MM-YY" (where DD-MM-YY is the date when
@@ -254,7 +255,7 @@ const string engine_info(bool to_uci) {
 
       ss << "\n"
          << compiler_info()
-         << "\nBuild date/time       : " << year << '-' << setw(2) << setfill('0') << month << '-' << setw(2) << setfill('0') << day << ' ' << __TIME__
+         << "\nBuild date/time    : " << year << '-' << setw(2) << setfill('0') << month << '-' << setw(2) << setfill('0') << day << ' ' << __TIME__
          << "\n";
   }
 
@@ -332,279 +333,11 @@ const std::string compiler_info() {
   return compiler;
 }
 
-namespace HW
-{
-    bool isInitialized = false;
-
-    DWORD numaNodeCount = 0;
-
-    DWORD processorCoreCount = 0;
-    DWORD logicalProcessorCount = 0;
-
-    DWORD processorCacheSize[3] = { 0, 0, 0 };
-
-    DWORD dwError = ERROR_SUCCESS;
-
-    string error_string()
-    {
-        std::stringstream ss;
-
-        ss << "<Error: 0x" << std::hex << std::setw(8) << std::setfill('0') << dwError << ">";
-        return ss.str();
-    }
-
-    void init()
-    {
-        if (isInitialized)
-            return;
-
-        isInitialized = true;
-
-        typedef BOOL(WINAPI* GLPIEX)(LOGICAL_PROCESSOR_RELATIONSHIP, PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, PDWORD);
-        static GLPIEX impGetLogicalProcessorInformationEx = (GLPIEX)(void (*)(void))GetProcAddress(GetModuleHandle("kernel32.dll"), "GetLogicalProcessorInformationEx");
-
-        void* oldBuffer = nullptr;
-        DWORD len = 0;
-        DWORD offset = 0;
-
-        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* bufferEx = nullptr;
-        SYSTEM_LOGICAL_PROCESSOR_INFORMATION* buffer = nullptr;
-        GROUP_AFFINITY* nodeGroupMask = nullptr;
-        ULONGLONG* nodeMask = nullptr;
-
-        auto release_memory = [&]()
-        {
-            if (bufferEx)      { free(bufferEx);      bufferEx      = nullptr; }
-            if (buffer)        { free(buffer);        buffer        = nullptr; }
-            if (oldBuffer)     { free(oldBuffer);     oldBuffer     = nullptr; }
-            if (nodeGroupMask) { free(nodeGroupMask); nodeGroupMask = nullptr; }
-            if (nodeMask)      { free(nodeMask);      nodeMask      = nullptr; }
-        };
-
-        // Use windows processor groups?
-        if (impGetLogicalProcessorInformationEx)
-        {
-            // Get array of node and core data
-            while (true)
-            {
-                if (impGetLogicalProcessorInformationEx(RelationAll, bufferEx, &len))
-                    break;
-
-                //Save old buffer in case realloc fails
-                oldBuffer = bufferEx;
-
-                if (GetLastError() == ERROR_INSUFFICIENT_BUFFER)
-                {
-                    bufferEx = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)realloc(bufferEx, len);
-                    if (!bufferEx)
-                        dwError = (DWORD)-1;
-                }
-                else
-                {
-                    bufferEx = nullptr; //Old value already stored in 'oldBuffer'
-                    dwError = (DWORD)-2;
-                }
-
-                if (!bufferEx)
-                {
-                    release_memory();
-                    return;
-                }
-            }
-
-            //Prepare
-            size_t maxNodes = 16;
-
-            //Allocate memory
-            nodeGroupMask = (GROUP_AFFINITY*)malloc(maxNodes * sizeof(GROUP_AFFINITY));
-            if (!nodeGroupMask)
-            {
-                dwError = (DWORD)-4;
-                release_memory();
-                return;
-            }
-
-            //Numa nodes loop
-            SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* ptr = bufferEx;
-            while (offset < len && offset + ptr->Size <= len)
-            {
-                if (ptr->Relationship == RelationNumaNode)
-                {
-                    if (numaNodeCount == maxNodes)
-                    {
-                        maxNodes += 16;
-
-                        oldBuffer = nodeGroupMask;
-                        nodeGroupMask = (GROUP_AFFINITY*)realloc(nodeGroupMask, maxNodes * sizeof(GROUP_AFFINITY));
-                        if (!nodeGroupMask)
-                        {
-                            dwError = (DWORD)-6;
-                            release_memory();
-                            return;
-                        }
-                    }
-
-                    nodeGroupMask[numaNodeCount] = ptr->NumaNode.GroupMask;
-                    numaNodeCount++;
-                }
-
-                offset += ptr->Size;
-                ptr = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)(((char*)ptr) + ptr->Size);
-            }
-
-            //Physical/Logical cores loop and cache
-            ptr = bufferEx;
-            offset = 0;
-            while (offset < len && offset + ptr->Size <= len)
-            {
-                if (ptr->Relationship == RelationProcessorCore)
-                {
-                    // Loop through nodes to find one with matching group number and intersecting mask
-                    for (size_t i = 0; i < numaNodeCount; i++)
-                    {
-                        if (nodeGroupMask[i].Group == ptr->Processor.GroupMask[0].Group && (nodeGroupMask[i].Mask & ptr->Processor.GroupMask[0].Mask))
-                        {
-                            ++processorCoreCount;
-                            logicalProcessorCount += ptr->Processor.Flags == LTP_PC_SMT ? 2 : 1;
-                        }
-                    }
-                }
-                else if (ptr->Relationship == RelationCache)
-                {
-                    switch (ptr->Cache.Level)
-                    {
-                    case 1:
-                    case 2:
-                    case 3:
-                        processorCacheSize[ptr->Cache.Level - 1] += ptr->Cache.CacheSize;
-                        break;
-
-                    default:
-                        assert(false);
-                        break;
-                    }
-                }
-
-                offset += ptr->Size;
-                ptr = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)(((char*)ptr) + ptr->Size);
-            }
-        }
-        else // Use windows but not its processor groups
-        {
-            while (true)
-            {
-                if (GetLogicalProcessorInformation(buffer, &len))
-                    break;
-
-                if (GetLastError() == ERROR_INSUFFICIENT_BUFFER)
-                {
-                    //Save old buffer in case realloc fails
-                    oldBuffer = buffer;
-
-                    buffer = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION*)realloc(buffer, len);
-                    if (!buffer)
-                        dwError = (DWORD)-9;
-                }
-                else
-                {
-                    buffer = nullptr; //Old value already stored in 'oldBuffer'
-                    dwError = (DWORD)-10;
-                }
-
-                if (!buffer)
-                {
-                    release_memory();
-                    return;
-                }
-            }
-
-            //Prepare
-            size_t maxNodes = 16;
-
-            //Allocate memory
-            nodeMask = (ULONGLONG*)malloc(maxNodes * sizeof(ULONGLONG));
-            if (!nodeMask)
-            {
-                dwError = (DWORD)-12;
-                release_memory();
-                return;
-            }
-
-            //Numa nodes loop
-            SYSTEM_LOGICAL_PROCESSOR_INFORMATION* ptr = buffer;
-            while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION) <= len)
-            {
-                if (ptr->Relationship == RelationNumaNode)
-                {
-                    if (numaNodeCount == maxNodes)
-                    {
-                        maxNodes += 16;
-
-                        oldBuffer = nodeMask;
-                        nodeMask = (ULONGLONG*)realloc(nodeMask, maxNodes * sizeof(ULONGLONG));
-                        if (!nodeMask)
-                        {
-                            dwError = (DWORD)-14;
-                            release_memory();
-                            return;
-                        }
-                    }
-
-                    nodeMask[numaNodeCount] = ptr->ProcessorMask;
-                    numaNodeCount++;
-                }
-
-                offset += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
-                ptr++;
-            }
-
-            //Physical/Logical cores and cache loop
-            ptr = buffer;
-            offset = 0;
-            while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION) <= len)
-            {
-                if (ptr->Relationship == RelationProcessorCore)
-                {
-                    // Loop through nodes to find one with intersecting mask
-                    for (size_t i = 0; i < numaNodeCount; i++)
-                    {
-                        if (nodeMask[i] & ptr->ProcessorMask)
-                        {
-                            ++processorCoreCount;
-                            logicalProcessorCount += ptr->ProcessorCore.Flags == 1 ? 2 : 1;
-                        }
-                    }
-                }
-                else if (ptr->Relationship == RelationCache)
-                {
-                    switch (ptr->Cache.Level)
-                    {
-                    case 1:
-                    case 2:
-                    case 3:
-                        processorCacheSize[ptr->Cache.Level - 1] += ptr->Cache.Size;
-                        break;
-
-                    default:
-                        assert(false);
-                        break;
-                    }
-                }
-
-                offset += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
-                ptr++;
-            }
-        }
-
-        release_memory();
-    }
-};
-
 string format_bytes(uint64_t bytes, int decimals)
 {
-    static const DWORDLONG _1KB = 1024;
-    static const DWORDLONG _1MB = _1KB * 1024;
-    static const DWORDLONG _1GB = _1MB * 1024;
+    static const uint64_t _1KB = 1024;
+    static const uint64_t _1MB = _1KB * 1024;
+    static const uint64_t _1GB = _1MB * 1024;
 
     std::stringstream ss;
 
@@ -622,13 +355,17 @@ string format_bytes(uint64_t bytes, int decimals)
 
 void show_logo()
 {
+#if defined(_WIN32)
     HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     CONSOLE_SCREEN_BUFFER_INFO csbiInfo;
     if (hConsole && !GetConsoleScreenBufferInfo(hConsole, &csbiInfo))
         hConsole = nullptr;
 
     if (hConsole)
-        SetConsoleTextAttribute(hConsole, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
+#elif defined(__linux)
+    cout << "\033[1;31m";
+#endif
 
     cout <<
         R"(
@@ -639,227 +376,636 @@ void show_logo()
 	  
 )" << endl;
 
+#if defined(_WIN32)
     if (hConsole)
         SetConsoleTextAttribute(hConsole, csbiInfo.wAttributes);
+#elif defined(__linux)
+    cout << "\033[0m";
+#endif
 }
 
-const string numa_nodes()
+namespace SysInfo
 {
-    HW::init();
-
-    if (HW::dwError != ERROR_SUCCESS)
-        return HW::error_string();
-
-    return to_string(HW::numaNodeCount);
-}
-
-const string physical_cores()
-{
-    HW::init();
-
-    if (HW::dwError != ERROR_SUCCESS)
-        return HW::error_string();
-
-    return to_string(HW::processorCoreCount);
-}
-
-const string logical_cores()
-{
-    HW::init();
-
-    if (HW::dwError != ERROR_SUCCESS)
-        return HW::error_string();
-
-    return to_string(HW::logicalProcessorCount);
-}
-
-const string is_hyper_threading()
-{
-    HW::init();
-
-    if (HW::dwError != ERROR_SUCCESS)
-        return "N/A";
-
-    return HW::processorCoreCount == HW::logicalProcessorCount ? "No" : "Yes";
-}
-
-const string cache_size(int idx)
-{
-    HW::init();
-
-    if (HW::dwError != ERROR_SUCCESS)
-        return HW::error_string();
-
-    return format_bytes(HW::processorCacheSize[idx], 0);
-}
-
-const string os_info()
-{
-    string osInfo;
-
-#ifdef _WIN32
+    namespace
     {
-        InitVersion();
+        uint32_t numaNodeCount = 0;
+        uint32_t processorCoreCount = 0;
+        uint32_t logicalProcessorCount = 0;
+        uint32_t processorCacheSize[3] = { 0, 0, 0 };
 
-        if (IsWindowsXPOrGreater())
+        uint64_t totalMemory = 0;
+
+        std::string osInfo;
+        std::string cpuBrand;
+
+        void init_hw_info()
         {
-            if (IsWindowsXPSP1OrGreater())
+#if defined(_WIN32)
+            typedef BOOL(WINAPI* GLPIEX)(LOGICAL_PROCESSOR_RELATIONSHIP, PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, PDWORD);
+            static GLPIEX impGetLogicalProcessorInformationEx = (GLPIEX)(void (*)(void))GetProcAddress(GetModuleHandle("kernel32.dll"), "GetLogicalProcessorInformationEx");
+
+            void* oldBuffer = nullptr;
+            DWORD len = 0;
+            DWORD offset = 0;
+
+            SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* bufferEx = nullptr;
+            SYSTEM_LOGICAL_PROCESSOR_INFORMATION* buffer = nullptr;
+            GROUP_AFFINITY* nodeGroupMask = nullptr;
+            ULONGLONG* nodeMask = nullptr;
+
+            auto release_memory = [&]()
             {
-                if (IsWindowsXPSP2OrGreater())
+                if (bufferEx) { free(bufferEx);      bufferEx = nullptr; }
+                if (buffer) { free(buffer);        buffer = nullptr; }
+                if (oldBuffer) { free(oldBuffer);     oldBuffer = nullptr; }
+                if (nodeGroupMask) { free(nodeGroupMask); nodeGroupMask = nullptr; }
+                if (nodeMask) { free(nodeMask);      nodeMask = nullptr; }
+            };
+
+            // Use windows processor groups?
+            if (impGetLogicalProcessorInformationEx)
+            {
+                // Get array of node and core data
+                while (true)
                 {
-                    if (IsWindowsXPSP3OrGreater())
+                    if (impGetLogicalProcessorInformationEx(RelationAll, bufferEx, &len))
+                        break;
+
+                    //Save old buffer in case realloc fails
+                    oldBuffer = bufferEx;
+
+                    if (GetLastError() == ERROR_INSUFFICIENT_BUFFER)
+                        bufferEx = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)realloc(bufferEx, len);
+                    else
+                        bufferEx = nullptr; //Old value already stored in 'oldBuffer'
+
+                    if (!bufferEx)
                     {
-                        if (IsWindowsVistaOrGreater())
+                        release_memory();
+                        return;
+                    }
+                }
+
+                //Prepare
+                size_t maxNodes = 16;
+
+                //Allocate memory
+                nodeGroupMask = (GROUP_AFFINITY*)malloc(maxNodes * sizeof(GROUP_AFFINITY));
+                if (!nodeGroupMask)
+                {
+                    release_memory();
+                    return;
+                }
+
+                //Numa nodes loop
+                SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* ptr = bufferEx;
+                while (offset < len && offset + ptr->Size <= len)
+                {
+                    if (ptr->Relationship == RelationNumaNode)
+                    {
+                        if (numaNodeCount == maxNodes)
                         {
-                            if (IsWindowsVistaSP1OrGreater())
+                            maxNodes += 16;
+
+                            oldBuffer = nodeGroupMask;
+                            nodeGroupMask = (GROUP_AFFINITY*)realloc(nodeGroupMask, maxNodes * sizeof(GROUP_AFFINITY));
+                            if (!nodeGroupMask)
                             {
-                                if (IsWindowsVistaSP2OrGreater())
+                                release_memory();
+                                return;
+                            }
+                        }
+
+                        nodeGroupMask[numaNodeCount] = ptr->NumaNode.GroupMask;
+                        numaNodeCount++;
+                    }
+
+                    offset += ptr->Size;
+                    ptr = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)(((char*)ptr) + ptr->Size);
+                }
+
+                //Physical/Logical cores loop and cache
+                ptr = bufferEx;
+                offset = 0;
+                while (offset < len && offset + ptr->Size <= len)
+                {
+                    if (ptr->Relationship == RelationProcessorCore)
+                    {
+                        // Loop through nodes to find one with matching group number and intersecting mask
+                        for (size_t i = 0; i < numaNodeCount; i++)
+                        {
+                            if (nodeGroupMask[i].Group == ptr->Processor.GroupMask[0].Group && (nodeGroupMask[i].Mask & ptr->Processor.GroupMask[0].Mask))
+                            {
+                                ++processorCoreCount;
+                                logicalProcessorCount += ptr->Processor.Flags == LTP_PC_SMT ? 2 : 1;
+                            }
+                        }
+                    }
+                    else if (ptr->Relationship == RelationCache)
+                    {
+                        switch (ptr->Cache.Level)
+                        {
+                        case 1:
+                        case 2:
+                        case 3:
+                            processorCacheSize[ptr->Cache.Level - 1] += ptr->Cache.CacheSize;
+                            break;
+
+                        default:
+                            assert(false);
+                            break;
+                        }
+                    }
+
+                    offset += ptr->Size;
+                    ptr = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)(((char*)ptr) + ptr->Size);
+                }
+            }
+            else // Use windows but not its processor groups
+            {
+                while (true)
+                {
+                    if (GetLogicalProcessorInformation(buffer, &len))
+                        break;
+
+                    if (GetLastError() == ERROR_INSUFFICIENT_BUFFER)
+                    {
+                        //Save old buffer in case realloc fails
+                        oldBuffer = buffer;
+
+                        buffer = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION*)realloc(buffer, len);
+                    }
+                    else
+                    {
+                        buffer = nullptr; //Old value already stored in 'oldBuffer'
+                    }
+
+                    if (!buffer)
+                    {
+                        release_memory();
+                        return;
+                    }
+                }
+
+                //Prepare
+                size_t maxNodes = 16;
+
+                //Allocate memory
+                nodeMask = (ULONGLONG*)malloc(maxNodes * sizeof(ULONGLONG));
+                if (!nodeMask)
+                {
+                    release_memory();
+                    return;
+                }
+
+                //Numa nodes loop
+                SYSTEM_LOGICAL_PROCESSOR_INFORMATION* ptr = buffer;
+                while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION) <= len)
+                {
+                    if (ptr->Relationship == RelationNumaNode)
+                    {
+                        if (numaNodeCount == maxNodes)
+                        {
+                            maxNodes += 16;
+
+                            oldBuffer = nodeMask;
+                            nodeMask = (ULONGLONG*)realloc(nodeMask, maxNodes * sizeof(ULONGLONG));
+                            if (!nodeMask)
+                            {
+                                release_memory();
+                                return;
+                            }
+                        }
+
+                        nodeMask[numaNodeCount] = ptr->ProcessorMask;
+                        numaNodeCount++;
+                    }
+
+                    offset += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+                    ptr++;
+                }
+
+                //Physical/Logical cores and cache loop
+                ptr = buffer;
+                offset = 0;
+                while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION) <= len)
+                {
+                    if (ptr->Relationship == RelationProcessorCore)
+                    {
+                        // Loop through nodes to find one with intersecting mask
+                        for (size_t i = 0; i < numaNodeCount; i++)
+                        {
+                            if (nodeMask[i] & ptr->ProcessorMask)
+                            {
+                                ++processorCoreCount;
+                                logicalProcessorCount += ptr->ProcessorCore.Flags == 1 ? 2 : 1;
+                            }
+                        }
+                    }
+                    else if (ptr->Relationship == RelationCache)
+                    {
+                        switch (ptr->Cache.Level)
+                        {
+                        case 1:
+                        case 2:
+                        case 3:
+                            processorCacheSize[ptr->Cache.Level - 1] += ptr->Cache.Size;
+                            break;
+
+                        default:
+                            assert(false);
+                            break;
+                        }
+                    }
+
+                    offset += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+                    ptr++;
+                }
+            }
+
+            release_memory();
+#elif defined(__linux__)
+            const int max_buffer = 1024;
+            char buffer[max_buffer];
+
+            //Run 'lscpu' to get CPU information
+            FILE* stream = popen("lscpu 2>&1", "r");
+            if (!stream)
+                return;
+
+            string cpuData;
+            while (!feof(stream))
+            {
+                if (fgets(buffer, max_buffer, stream) != NULL)
+                    cpuData.append(buffer);
+            }
+
+            pclose(stream);
+
+            if (cpuData.empty())
+                return;
+
+            auto parse_unit = [](const char *s)
+            {
+                if (strcasecmp(s, "KB") == 0 || strcasecmp(s, "KiB") == 0)
+                    return 1024;
+
+                if (strcasecmp(s, "MB") == 0 || strcasecmp(s, "MiB") == 0)
+                    return 1024 * 1024;
+
+                if (strcasecmp(s, "GB") == 0 || strcasecmp(s, "GiB") == 0)
+                    return 1024 * 1024 * 1024;
+
+                return 0;
+            };
+
+            //Find required data
+            static regex rgxNumberOfCpus("^CPU\\(s\\):\\s*(\\d*)$");
+            static regex rgxThreadsPerCode("^Thread\\(s\\) per core:\\s*(\\d*)$");
+            static regex rgxNumaNodes("NUMA node\\(s\\):\\s*(\\d*)$");
+            static regex rgxL1dCache("^L1d cache:\\s*(\\d*) (.*)$");
+            static regex rgxL1iCache("^L1i cache:\\s*(\\d*) (.*)$");
+            static regex rgxL2Cache("^L2 cache:\\s*(\\d*) (.*)$");
+            static regex rgxL3Cache("^L3 cache:\\s*(\\d*) (.*)$");
+            static regex rgxCpuBrand("^Model name:\\s*(.*)$");
+
+            int tempThreadsPerCode = 0;
+
+            std::stringstream ss(cpuData);
+            std::string line;
+            while (std::getline(ss, line))
+            {
+                smatch match;
+                if (regex_search(line, match, rgxNumberOfCpus))
+                {
+                    processorCoreCount = (uint32_t)atoi(match[1].str().c_str());
+                }
+                else if(regex_search(line, match, rgxThreadsPerCode))
+                {
+                    tempThreadsPerCode = atoi(match[1].str().c_str());
+                }
+                else if (regex_search(line, match, rgxL1dCache) || regex_search(line, match, rgxL1iCache))
+                {
+                    processorCacheSize[0] += (uint32_t)atoi(match[1].str().c_str()) * parse_unit(match[2].str().c_str());
+                }
+                else if (regex_search(line, match, rgxL2Cache))
+                {
+                    processorCacheSize[1] += (uint32_t)atoi(match[1].str().c_str()) * parse_unit(match[2].str().c_str());
+                }
+                else if (regex_search(line, match, rgxL3Cache))
+                {
+                    processorCacheSize[2] += (uint32_t)atoi(match[1].str().c_str()) * parse_unit(match[2].str().c_str());
+                }
+                else if (regex_search(line, match, rgxNumaNodes))
+                {
+                    numaNodeCount = (uint32_t)atoi(match[1].str().c_str());
+                }
+                else if (regex_search(line, match, rgxCpuBrand))
+                {
+                    cpuBrand = match[1].str();
+                }
+            }
+
+            if (processorCoreCount)
+            {
+                if (tempThreadsPerCode)
+                    logicalProcessorCount = processorCoreCount * tempThreadsPerCode;
+                else
+                    logicalProcessorCount = processorCoreCount;
+            }
+#endif
+        }
+
+        void init_processor_brand()
+        {
+#if defined(_WIN32)
+            HKEY hKey = HKEY_LOCAL_MACHINE;
+            TCHAR Data[1024];
+
+            //Clear buffer
+            ZeroMemory(Data, sizeof(Data));
+
+            //Open target registry key
+            DWORD buffersize = sizeof(Data) / sizeof(Data[0]);
+            LONG result = RegOpenKeyEx(HKEY_LOCAL_MACHINE, TEXT("Hardware\\Description\\System\\CentralProcessor\\0\\"), 0, KEY_READ, &hKey);
+            if (result == ERROR_SUCCESS)
+            {
+                //Get value of 'Key = ProcessorNameString' which is the processor name
+                result = RegQueryValueEx(hKey, TEXT("ProcessorNameString"), NULL, NULL, (LPBYTE)&Data, &buffersize);
+
+                //If we failed to retrieve the processor name, then we retrun "N/A"
+                if (result == ERROR_SUCCESS)
+                {
+                    cpuBrand = Data;
+                }
+
+                // Close the Registry Key
+                RegCloseKey(hKey);
+            }
+#elif defined(__linux__)
+            //Nothing to do here since CPU brand is read when init_hw_info() is called
+#endif
+        }
+
+        void init_os_info()
+        {
+#if defined(_WIN32)
+            {
+                InitVersion();
+
+                if (IsWindowsXPOrGreater())
+                {
+                    if (IsWindowsXPSP1OrGreater())
+                    {
+                        if (IsWindowsXPSP2OrGreater())
+                        {
+                            if (IsWindowsXPSP3OrGreater())
+                            {
+                                if (IsWindowsVistaOrGreater())
                                 {
-                                    if (IsWindows7OrGreater())
+                                    if (IsWindowsVistaSP1OrGreater())
                                     {
-                                        if (IsWindows7SP1OrGreater())
+                                        if (IsWindowsVistaSP2OrGreater())
                                         {
-                                            if (IsWindows8OrGreater())
+                                            if (IsWindows7OrGreater())
                                             {
-                                                if (IsWindows8Point1OrGreater())
+                                                if (IsWindows7SP1OrGreater())
                                                 {
-                                                    if (IsWindows10OrGreater())
+                                                    if (IsWindows8OrGreater())
                                                     {
-                                                        osInfo = "Windows 10";
+                                                        if (IsWindows8Point1OrGreater())
+                                                        {
+                                                            if (IsWindows10OrGreater())
+                                                            {
+                                                                osInfo = "Windows 10";
+                                                            }
+                                                            else
+                                                            {
+                                                                osInfo = "Windows 8.1";
+                                                            }
+                                                        }
+                                                        else
+                                                        {
+                                                            osInfo = "Windows 8";
+                                                        }
                                                     }
                                                     else
                                                     {
-                                                        osInfo = "Windows 8.1";
+                                                        osInfo = "Windows 7 SP1";
                                                     }
                                                 }
                                                 else
                                                 {
-                                                    osInfo = "Windows 8";
+                                                    osInfo = "Windows 7";
                                                 }
                                             }
                                             else
                                             {
-                                                osInfo = "Windows 7 SP1";
+                                                osInfo = "Vista SP2";
                                             }
                                         }
                                         else
                                         {
-                                            osInfo = "Windows 7";
+                                            osInfo = "Vista SP1";
                                         }
                                     }
                                     else
                                     {
-                                        osInfo = "Vista SP2";
+                                        osInfo = "Vista";
                                     }
                                 }
                                 else
                                 {
-                                    osInfo = "Vista SP1";
+                                    osInfo = "XP SP3";
                                 }
                             }
                             else
                             {
-                                osInfo = "Vista";
+                                osInfo = "XP SP2";
                             }
                         }
                         else
                         {
-                            osInfo = "XP SP3";
+                            osInfo = "XP SP1";
                         }
                     }
                     else
                     {
-                        osInfo = "XP SP2";
+                        osInfo = "XP";
                     }
+                }
+
+                if (IsWindowsServer())
+                {
+                    osInfo += " Server";
                 }
                 else
                 {
-                    osInfo = "XP SP1";
+                    osInfo += " Client";
                 }
+
+                osInfo += " Or Greater";
+            }
+#elif defined(__linux__)
+            ifstream distribInfp("/etc/lsb-release");
+            if (!distribInfp.is_open())
+                return;
+
+            static regex rgxDistributionID("^DISTRIB_ID=(.*)$");
+            static regex rgxDistribRelease("^DISTRIB_RELEASE=(.*)$");
+            static regex rgxDistribDescription("^DISTRIB_DESCRIPTION=\"(.*)\"$");
+
+            std::string distribID;
+            std::string distribRelease;
+            std::string distribDescription;
+
+            std::string line;
+            while (std::getline(distribInfp, line))
+            {
+                smatch match;
+                if (regex_search(line, match, rgxDistributionID))
+                {
+                    distribID = match[1].str();
+                }
+                else if (regex_search(line, match, rgxDistribRelease))
+                {
+                    distribRelease = match[1].str();
+                }
+                else if (regex_search(line, match, rgxDistribDescription))
+                {
+                    distribDescription = match[1].str();
+
+                    //If we have the distrib description then we are good to go
+                    break;
+                }
+            }
+
+            if (!distribDescription.empty())
+                osInfo = distribDescription;
+            else if (!distribID.empty() && !distribRelease.empty())
+                osInfo = distribID + " " + distribRelease;
+#endif
+        }
+
+        void init_mem_info()
+        {
+#if defined(_WIN32)
+            ULONGLONG totMem;
+            if (GetPhysicallyInstalledSystemMemory(&totMem))
+            {
+                //Returned value is in KB
+                totalMemory = totMem * 1024;
             }
             else
             {
-                osInfo = "XP";
+                MEMORYSTATUSEX statex;
+                statex.dwLength = sizeof(statex);
+
+                if (GlobalMemoryStatusEx(&statex))
+                    totalMemory = statex.ullTotalPhys;
+                else
+                    totalMemory = 0;
             }
-        }
+#elif defined(__linux__)
+            ifstream memInfo("/proc/meminfo");
+            if (!memInfo.is_open())
+                return;
 
-        if (IsWindowsServer())
-        {
-            osInfo += " Server";
-        }
-        else
-        {
-            osInfo += " Client";
-        }
+            static regex rgxMemTotal("^MemTotal:\\s*(\\d*) (.*)$$");
 
-        osInfo += " Or Greater";
+            std::string line;
+            while (std::getline(memInfo, line))
+            {
+                smatch match;
+                if (regex_search(line, match, rgxMemTotal))
+                {
+                    totalMemory = strtoull(match[1].str().c_str(), nullptr, 10);
+                    if (strcasecmp(match[2].str().c_str(), "KB") == 0 || strcasecmp(match[2].str().c_str(), "KiB") == 0)
+                        totalMemory *= 1024;
+                    else if (strcasecmp(match[2].str().c_str(), "MB") == 0 || strcasecmp(match[2].str().c_str(), "MiB") == 0)
+                        totalMemory *= 1024 * 1024;
+                    else if (strcasecmp(match[2].str().c_str(), "GB") == 0 || strcasecmp(match[2].str().c_str(), "GiB") == 0)
+                        totalMemory *= 1024 * 1024 * 1024;
+
+                    //We found what we are looking for
+                    break;
+                }
+            }
+#endif
+        }
     }
-#else
-    osInfo = "N/A";
-#endif
 
-    return osInfo;
-}
-
-const string processor_brand()
-{
-#ifdef _WIN32
-    HKEY hKey = HKEY_LOCAL_MACHINE;
-    const DWORD Const_Data_Size = 1000;
-    TCHAR Data[Const_Data_Size];
-
-    //Clear buffer
-    ZeroMemory(Data, sizeof(Data));
-
-    //Open target registry key
-    DWORD buffersize = sizeof(Data) / sizeof(Data[0]);
-    LONG result_registry_functions = RegOpenKeyEx(HKEY_LOCAL_MACHINE, TEXT("Hardware\\Description\\System\\CentralProcessor\\0\\"), 0, KEY_READ, &hKey);
-    if (result_registry_functions != ERROR_SUCCESS)
-        return "N/A";
-
-    //Get value of 'Key = ProcessorNameString' which is the processor name
-    result_registry_functions = RegQueryValueEx(hKey, TEXT("ProcessorNameString"), NULL, NULL, (LPBYTE)&Data, &buffersize);
-
-    //If we failed to retrieve the processor name, then we retrun "N/A"
-    if (result_registry_functions != ERROR_SUCCESS)
-        _tcscpy(Data, _T("N/A"));
-
-    // Close the Registry Key
-    RegCloseKey(hKey);
-
-    return Data;
-#else
-    return "N/A";
-#endif
-}
-
-const string total_memory()
-{
-#ifdef _WIN32
-    ULONGLONG totalInstalledMemory;
-    if (GetPhysicallyInstalledSystemMemory(&totalInstalledMemory))
+    void init()
     {
-        //Returned value is in KB
-        totalInstalledMemory *= 1024;
+        init_hw_info();
+        init_processor_brand();
+        init_os_info();
+        init_mem_info();
     }
-    else
+
+    const string numa_nodes()
     {
-        MEMORYSTATUSEX statex;
-        statex.dwLength = sizeof(statex);
+        if (!numaNodeCount)
+            return "N/A";
 
-        if (GlobalMemoryStatusEx(&statex))
-            totalInstalledMemory = statex.ullTotalPhys;
-        else
-            totalInstalledMemory = 0;
+        return to_string(numaNodeCount);
     }
 
-    if (totalInstalledMemory == 0)
-        return "N/A";
+    const string physical_cores()
+    {
+        if (!processorCoreCount)
+            return "N/A";
 
-    return format_bytes(totalInstalledMemory, 0);
-#else
-    return "N/A";
-#endif
+        return to_string(processorCoreCount);
+    }
+
+    const string logical_cores()
+    {
+        if (!logicalProcessorCount)
+            return "N/A";
+
+        return to_string(logicalProcessorCount);
+    }
+
+    const string is_hyper_threading()
+    {
+        if (!logicalProcessorCount || !processorCoreCount)
+            return "N/A";
+
+        return processorCoreCount == logicalProcessorCount ? "No" : "Yes";
+    }
+
+    const string cache_info(int idx)
+    {
+        if (!processorCacheSize[idx])
+            return "N/A";
+
+        return format_bytes(processorCacheSize[idx], 0);
+    }
+
+    const string os_info()
+    {
+        if (osInfo.empty())
+            return "N/A";
+
+        return osInfo;
+    }
+
+    const string processor_brand()
+    {
+        if (cpuBrand.empty())
+            return "N/A";
+
+        return cpuBrand;
+    }
+
+    const string total_memory()
+    {
+        if (totalMemory == 0)
+            return "N/A";
+
+        return format_bytes(totalMemory, 0);
+    }
 }
 
 /// Debug functions used mainly to collect run-time statistics
@@ -1182,11 +1328,10 @@ namespace CommandLine {
 string argv0;            // path+name of the executable binary, as given by argv[0]
 string binaryDirectory;  // path of the executable directory
 string workingDirectory; // path of the working directory
-string pathSeparator;    // Separator for our current OS
 
 void init(int argc, char* argv[]) {
     (void)argc;
-    string separator;
+    string pathSeparator;
 
     // extract the path+name of the executable binary
     argv0 = argv[0];

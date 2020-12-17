@@ -37,6 +37,7 @@ namespace PSQT {
 int main(int argc, char* argv[]) {
 
   Utility::init(argv[0]);
+  SysInfo::init();
   show_logo();
 
   std::cout << engine_info() << std::endl;
@@ -44,14 +45,15 @@ int main(int argc, char* argv[]) {
   CommandLine::init(argc, argv);
 
   std::cout
-      << "Operating System (OS) : " << os_info() << std::endl
-      << "NUMA Nodes            : " << numa_nodes() << std::endl
-      << "CPU Brand             : " << processor_brand() << std::endl
-      << "Memory installed (RAM): " << total_memory() << std::endl
-      << "Cores                 : " << physical_cores() << std::endl
-      << "Threads               : " << logical_cores() << std::endl
-      << "Hyper-Threading       : " << is_hyper_threading() << std::endl
-      << "L1/L2/L3 cache size   : " << cache_size(0) << "/" << cache_size(1) << "/" << cache_size(2) << std::endl;
+      << "Operating System (OS) : " << SysInfo::os_info() << std::endl
+																
+      << "CPU Brand             : " << SysInfo::processor_brand() << std::endl
+      << "NUMA Nodes            : " << SysInfo::numa_nodes() << std::endl
+      << "Cores                 : " << SysInfo::physical_cores() << std::endl
+      << "Threads               : " << SysInfo::logical_cores() << std::endl
+      << "Hyper-Threading       : " << SysInfo::is_hyper_threading() << std::endl
+      << "L1/L2/L3 cache size   : " << SysInfo::cache_info(0) << "/" << SysInfo::cache_info(1) << "/" << SysInfo::cache_info(2) << std::endl
+      << "Memory installed (RAM): " << SysInfo::total_memory() << std::endl << std::endl;
 
   UCI::init(Options);
   Tune::init();
