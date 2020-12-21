@@ -1058,8 +1058,7 @@ namespace {
     if (ss->ttHit)
     {
         // Never assume anything about values stored in TT
-        ss->staticEval = eval = tte->eval();
-        if (eval == VALUE_NONE)
+        if ((ss->staticEval = eval = tte->eval()) == VALUE_NONE)
             ss->staticEval = eval = evaluate(pos);
 
         // Can ttValue be used as a better position evaluation?
@@ -1077,19 +1076,19 @@ namespace {
             ss->staticEval = eval = -(ss-1)->staticEval + 2 * Tempo;
     }
 
+    ss->staticEval = eval = eval * std::max(0, (100 - pos.rule50_count())) / 100;
+
     if (gameCycle)
         ss->staticEval = eval = eval * std::max(0, (100 - pos.rule50_count())) / 100;
 
     if (!ss->ttHit)
         tte->save(posKey, VALUE_NONE, ss->ttPv, BOUND_NONE, DEPTH_NONE, MOVE_NONE, eval);
 
-    // Update static history for previous move
+    // Use static evaluation difference to improve quiet move ordering
     if (is_ok((ss-1)->currentMove) && !(ss-1)->inCheck && !priorCapture)
     {
-        int bonus = ss->staticEval > -(ss-1)->staticEval + 2 * Tempo ? -stat_bonus(depth) :
-                    ss->staticEval < -(ss-1)->staticEval + 2 * Tempo ? stat_bonus(depth) :
-                    0;
-        thisThread->staticHistory[~us][from_to((ss-1)->currentMove)] << bonus;
+        int bonus = std::clamp(-depth * 4 * int((ss-1)->staticEval + ss->staticEval - 2 * Tempo), -1000, 1000);
+        thisThread->mainHistory[~us][from_to((ss-1)->currentMove)] << bonus;
     }
 	if (thisThread->fullSearch) goto moves_loop;
     }
@@ -1182,7 +1181,6 @@ namespace {
            // so effective depth is equal to depth - 3
            && (   !ss->ttHit
                 || ttDepth < depth - 3
-										
                 || ttValue >= probCutBeta))
        {
            // if ttMove is a capture and value from transposition table is good enough produce probCut
@@ -1235,7 +1233,6 @@ namespace {
                        // if transposition table doesn't have equal or more deep info write probCut data into it
                        if (  !ss->ttHit
                            || ttDepth < depth - 4)
-													
                            tte->save(posKey, value_to_tt(value, ss->ply), ttPv,
                                      BOUND_LOWER, depth - 4, move, ss->staticEval);
 
@@ -1262,7 +1259,6 @@ moves_loop: // When in check, search starts from here
     Move countermove = thisThread->counterMoves[pos.piece_on(prevSq)][prevSq];
 
     MovePicker mp(pos, ttMove, depth, &thisThread->mainHistory,
-                                      &thisThread->staticHistory,
                                       &thisThread->lowPlyHistory,
                                       &captureHistory,
                                       contHist,
@@ -1405,7 +1401,6 @@ moves_loop: // When in check, search starts from here
       // result is lower than ttValue minus a margin then we will extend the ttMove.
       else if (    depth >= 7
           &&  move == ttMove
-					   
           && !rootNode
           && !excludedMove // Avoid recursive singular search
           &&  ttValue != VALUE_NONE
@@ -1515,6 +1510,10 @@ moves_loop: // When in check, search starts from here
 
           if (rootDepth > 10 && pos.king_danger())
               r -= 1;
+
+          // Increase reduction at root and non-PV nodes when the best move does not change frequently
+          /*if ((rootNode || !PvNode) && thisThread->rootDepth > 10 && thisThread->bestMoveChanges <= 2)
+              r++;*/
 
           // More reductions for late moves if position was not in previous PV
           if (moveCountPruning && !formerPv)
@@ -1853,6 +1852,8 @@ moves_loop: // When in check, search starts from here
             (ss-1)->currentMove != MOVE_NULL ? evaluate(pos)
                                              : -(ss-1)->staticEval + 2 * Tempo;
 
+        ss->staticEval = bestValue = bestValue * std::max(0, (100 - pos.rule50_count())) / 100;
+
         if (gameCycle)
             ss->staticEval = bestValue = bestValue * std::max(0, (100 - pos.rule50_count())) / 100;
 
@@ -1882,7 +1883,6 @@ moves_loop: // When in check, search starts from here
     // queen and checking knight promotions, and other checks(only if depth >= DEPTH_QS_CHECKS)
     // will be generated.
     MovePicker mp(pos, ttMove, depth, &thisThread->mainHistory,
-                                      &thisThread->staticHistory,
                                       &thisThread->captureHistory,
                                       contHist,
                                       to_sq((ss-1)->currentMove));
@@ -1941,6 +1941,7 @@ moves_loop: // When in check, search starts from here
 
       // CounterMove based pruning
       if (  !captureOrPromotion
+          && !PvNode
           && bestValue > VALUE_TB_LOSS_IN_MAX_PLY
           && (*contHist[0])[pos.moved_piece(move)][to_sq(move)] < CounterMovePruneThreshold
           && (*contHist[1])[pos.moved_piece(move)][to_sq(move)] < CounterMovePruneThreshold)
