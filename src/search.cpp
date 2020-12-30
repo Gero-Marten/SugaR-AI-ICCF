@@ -307,11 +307,11 @@ void MainThread::search() {
                           rootPos.undo_move((*it)->move);
 
                       //Don't consider this experience move if a draw is detected
-                      if (drawDetected)
-                          continue;
-
-                      //Calculate estimated sum
-                      estimatedValue[tempExpEx] = Value(valueSum / valueWeight);
+                      if (!drawDetected)
+                      {
+                          //Calculate estimated sum
+                          estimatedValue[tempExpEx] = Value(valueSum / valueWeight);
+                      }
 
                       //Next
                       tempExpEx = tempExpEx->next;
