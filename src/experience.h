@@ -37,6 +37,7 @@ namespace Experience
         uint8_t padding[4]; //4 bytes
 
         ExpEntry() = delete;
+        ExpEntry(const ExpEntry& exp) = delete;
         ExpEntry& operator =(const ExpEntry& exp) = delete;
         
         inline explicit ExpEntry(Key k, Move m, Value v, Depth d)
@@ -102,10 +103,13 @@ namespace Experience
 
     void init();
 
-    bool load(bool releaseExisting);
+    void load(bool releaseExisting);
     void unload();
     void save();
     void reload();
+
+    void wait_for_loading_finished();
+
     const ExpEntryEx* probe(Key k);
 
     void defrag(int argc, char* argv[]);

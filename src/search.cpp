@@ -221,6 +221,9 @@ void MainThread::search() {
       return;
   }
 
+  //Make sure experience has finished loading
+  Experience::wait_for_loading_finished();
+
   Color us = rootPos.side_to_move();
   Time.init(Limits, us, rootPos.game_ply());
   if (!Limits.infinite)

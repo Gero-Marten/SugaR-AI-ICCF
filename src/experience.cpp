@@ -25,6 +25,10 @@
 #include <sstream>
 #include <vector>
 #include <stdio.h> //For: remove()
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <atomic>
 #include "misc.h"
 #include "uci.h"
 #include "experience.h"
@@ -46,20 +50,50 @@ namespace Experience
         class ExperienceData
         {
         private:
-            vector<ExpEntryEx*> _expExData;
+            vector<ExpEntryEx*>     _expExData;
 
-            ExpMap _mainExp;
-            vector<ExpEntry> _newPvExp;
-            vector<ExpEntry> _newMultiPvExp;
+            ExpMap                  _mainExp;
+            vector<ExpEntry*>       _newPvExp;
+            vector<ExpEntry*>       _newMultiPvExp;
+
+            bool                    _loading;
+            std::atomic<bool>       _abortLoading;      //Only used when destructing
+            bool                    _loadingResult;
+            std::thread             *_loaderThread;
+            std::condition_variable _loadingCond;
+            std::mutex              _loaderMutex;
 
         private:
             void clear()
             {
+                //Make sure we are not loading an experience file
+                _abortLoading.store(true, std::memory_order_relaxed);
+                wait_for_load_finished();
+                assert(_loaderThread == nullptr);
+
+                //Free
                 for (ExpEntryEx *&p : _expExData)
                     free(p);
 
-                _expExData.clear();
+                //Clear
                 _mainExp.clear();
+                _expExData.clear();
+
+                //Clear new exp
+                clear_new_exp();
+            }
+
+            void clear_new_exp()
+            {
+                //Delete PV experience
+                for (const ExpEntry* exp : _newPvExp)
+                    delete exp;
+
+                //Delete NonPV experience
+                for (const ExpEntry* exp : _newMultiPvExp)
+                    delete exp;
+                
+                //Clear vectors
                 _newPvExp.clear();
                 _newMultiPvExp.clear();
             }
@@ -117,6 +151,123 @@ namespace Experience
                 return true;
             }
 
+            bool _load(string filename)
+            {
+                ifstream in(filename, ios::in | ios::binary | ios::ate);
+                if (!in.is_open())
+                {
+                    sync_cout << "info string Could not open experience file: " << filename << sync_endl;
+                    return false;
+                }
+
+                size_t inSize = in.tellg();
+                if (inSize == 0)
+                {
+                    sync_cout << "info string The experience file [" << filename << "] is empty" << sync_endl;
+                    return false;
+                }
+
+                size_t expDataSize = inSize - ExperienceSignatureLength;
+                size_t expCount = expDataSize / sizeof(ExpEntry);
+                if (expCount * sizeof(ExpEntry) != expDataSize)
+                {
+                    sync_cout << "info string Experience file [" << filename << "] is corrupted. Size: " << inSize << ", exp-size: " << expDataSize << ", exp-count: " << expCount << sync_endl;
+                    return false;
+                }
+
+                //Seek to beginning of file
+                in.seekg(ios::beg);
+
+                //Check signature
+                char* sig = (char*)malloc(ExperienceSignatureLength);
+                if (!sig)
+                {
+                    sync_cout << "info string Failed to allocate " << ExperienceSignatureLength << " bytes for experience signature verification" << sync_endl;
+                    return false;
+                }
+
+                if (!in.read(sig, ExperienceSignatureLength))
+                {
+                    sync_cout << "info string Failed to read " << ExperienceSignatureLength << " bytes for experience signature verification" << sync_endl;
+                    return false;
+                }
+
+                if (memcmp(sig, ExperienceSignature, ExperienceSignatureLength) != 0)
+                {
+                    free(sig);
+
+                    sync_cout << "info string Experience file [" << filename << "] signature missmatch " << sync_endl;
+                    return false;
+                }
+
+                //Free signature memory
+                free(sig);
+
+                //Allocate buffer for ExpEx data
+                ExpEntryEx* expData = (ExpEntryEx*)malloc(expCount * sizeof(ExpEntryEx));
+                if (!expData)
+                {
+                    sync_cout << "info string Failed to allocate " << expCount * sizeof(ExpEntryEx) << " bytes for stored experience data from file [" << filename << "]" << sync_endl;
+                    return false;
+                }
+
+                //Few variables to be used for statistical information
+                size_t prevPosCount = _mainExp.size();
+
+                //Load experience entries
+                size_t duplicateMoves = 0;
+                for (size_t i = 0; i < expCount; i++)
+                {
+                    if (_abortLoading.load(std::memory_order_relaxed))
+                        break;
+
+                    //Prepare to read
+                    ExpEntryEx* expEx = expData + i;
+                    expEx->next = nullptr;
+
+                    //Read
+                    if (!in.read((char*)expEx, sizeof(ExpEntry)))
+                    {
+                        free(expData);
+
+                        sync_cout << "info string Failed to read " << sizeof(ExpEntryEx) << " bytes of experience entry " << i + 1 << " of " << expCount << sync_endl;
+                        return false;
+                    }
+
+                    //Merge
+                    if (!link_entry(expEx))
+                        duplicateMoves++;
+                }
+
+                //Add buffer to vector so that it will be released later
+                _expExData.push_back(expData);
+
+                //Nothing to do if loading was aborted
+                if (_abortLoading.load(std::memory_order_relaxed))
+                    return false;
+
+                //Show some statistics
+                if (prevPosCount)
+                {
+                    sync_cout
+                        << "info string " << filename << " -> Total new moves: " << expCount
+                        << ". Total new positions: " << (_mainExp.size() - prevPosCount)
+                        << ". Duplicate moves: " << duplicateMoves
+                        << sync_endl;
+                }
+                else
+                {
+                    sync_cout
+                        << "info string " << filename << " -> Total moves: " << expCount
+                        << ". Total positions: " << _mainExp.size()
+                        << ". Duplicate moves: " << duplicateMoves
+                        << ". Fragmentation: " << std::setprecision(2) << std::fixed << 100.0 * (double)duplicateMoves / (double)expCount << "%"
+                        << sync_endl;
+                }
+
+                return true;
+            }
+
             bool _save(string filename, bool saveAll)
             {
                 fstream out;
@@ -171,12 +322,15 @@ namespace Experience
 
                 //Save new PV experience
                 int newPvExpCount = 0;
-                for (const ExpEntry& e : _newPvExp)
+                for (const ExpEntry* e : _newPvExp)
                 {
-                    if (e.depth < MIN_EXP_DEPTH)
+                    if (!e)
                         continue;
 
-                    out.write((const char*)(&e), sizeof(ExpEntry));
+                    if (e->depth < MIN_EXP_DEPTH)
+                        continue;
+
+                    out.write((const char*)e, sizeof(ExpEntry));
                     if (!out)
                     {
                         sync_cout << "info string Failed to save new PV experience entry to experience file [" << filename << "]" << sync_endl;
@@ -188,12 +342,15 @@ namespace Experience
 
                 //Save new MultiPV experience
                 int newMultiPvExpCount = 0;
-                for (const ExpEntry& e : _newMultiPvExp)
+                for (const ExpEntry* e : _newMultiPvExp)
                 {
-                    if (e.depth < MIN_EXP_DEPTH)
+                    if (!e)
                         continue;
 
-                    out.write((const char*)(&e), sizeof(ExpEntry));
+                    if (e->depth < MIN_EXP_DEPTH)
+                        continue;
+
+                    out.write((const char*)e, sizeof(ExpEntry));
 
                     if (!out)
                     {
@@ -205,8 +362,7 @@ namespace Experience
                 }
 
                 //Clear new moves
-                _newPvExp.clear();
-                _newMultiPvExp.clear();
+                clear_new_exp();
 
                 if (saveAll)
                 {
@@ -223,6 +379,10 @@ namespace Experience
         public:
             ExperienceData()
             {
+                _loading = false;
+                _abortLoading.store(false, std::memory_order_relaxed);
+                _loadingResult = false;
+                _loaderThread = nullptr;
             }
 
             ~ExperienceData()
@@ -230,129 +390,57 @@ namespace Experience
                 clear();
             }
 
-            const ExpMap &main_exp() const { return _mainExp; }
-            const vector<ExpEntry> &new_pv_exp() const { return _newPvExp; }
-            const vector<ExpEntry> &new_multipv_exp() const { return _newMultiPvExp; }
-
             bool has_new_exp() const
             {
                 return _newPvExp.size() || _newMultiPvExp.size();
             }
 
-            bool load(string filename)
+            bool load(string filename, bool synchronous)
             {
-                ifstream in(filename, ios::in | ios::binary | ios::ate);
-                if (!in.is_open())
+                //Make sure we are not already in the process of loading same/other experience file
+                wait_for_load_finished();
+
+                //Load requested experience file
+                _loadingResult = false;
+
+                //Block
                 {
-                    sync_cout << "info string Could not open experience file: " << filename << sync_endl;
-                    return false;
+                    _loading = true;
+                    std::lock_guard<std::mutex> lg1(_loaderMutex);
+                    _loaderThread = new std::thread(std::thread([this, filename]()
+                        {
+                            //Load
+                            _loadingResult = _load(filename);
+
+                            //Notify
+                            {
+                                std::lock_guard<std::mutex> lg2(_loaderMutex);
+                                _loading = false;
+                                _loadingCond.notify_one();
+                            }
+                            
+                            //Detach and delete thread
+                            _loaderThread->detach();
+                            delete _loaderThread;
+                            _loaderThread = nullptr;
+                        }));
                 }
 
-                size_t inSize = in.tellg();
-                if (inSize == 0)
-                {
-                    sync_cout << "info string The experience file [" << filename << "] is empty" << sync_endl;
-                    return false;
-                }
+                return synchronous ? wait_for_load_finished() : true;
+            }
 
-                size_t expDataSize = inSize - ExperienceSignatureLength;
-                size_t expCount = expDataSize / sizeof(ExpEntry);
-                if (expCount * sizeof(ExpEntry) != expDataSize)
-                {
-                    sync_cout << "info string Experience file [" << filename << "] is corrupted. Size: " << inSize << ", exp-size: " << expDataSize << ", exp-count: " << expCount << sync_endl;
-                    return false;
-                }
-
-                //Seek to beginning of file
-                in.seekg(ios::beg);
-
-                //Check signature
-                char* sig = (char*)malloc(ExperienceSignatureLength);
-                if (!sig)
-                {
-                    sync_cout << "info string Failed to allocate " << ExperienceSignatureLength << " bytes for experience signature verification" << sync_endl;
-                    return false;
-                }
-                
-                if (!in.read(sig, ExperienceSignatureLength))
-                {
-                    sync_cout << "info string Failed to read " << ExperienceSignatureLength << " bytes for experience signature verification" << sync_endl;
-                    return false;
-                }
-
-                if (memcmp(sig, ExperienceSignature, ExperienceSignatureLength) != 0)
-                {
-                    free(sig);
-
-                    sync_cout << "info string Experience file [" << filename << "] signature missmatch " << sync_endl;
-                    return false;
-                }
-
-                //Free signature memory
-                free(sig);
-
-                //Allocate buffer for ExpEx data
-                ExpEntryEx *expData = (ExpEntryEx*)malloc(expCount * sizeof(ExpEntryEx));
-                if (!expData)
-                {
-                    sync_cout << "info string Failed to allocate " << expCount * sizeof(ExpEntryEx) << " bytes for stored experience data from file [" << filename << "]" << sync_endl;
-                    return false;
-                }
-
-                //Few variables to be used for statistical information
-                size_t prevPosCount = _mainExp.size();
-
-                //Load experience entries
-                size_t duplicateMoves = 0;
-                ExpEntry exp(Key(0), Move(0), Value(0), Depth(0));
-                for (size_t i = 0; i < expCount; i++)
-                {
-                    if (!in.read((char*)&exp, sizeof(ExpEntry)))
-                    {
-                        free(expData);
-
-                        sync_cout << "info string Failed to read " << sizeof(ExpEntryEx) << " bytes of experience entry " << i + 1 << " of " << expCount << sync_endl;
-                        return false;
-                    }
-
-                    //Convert to ExpEntryEx
-                    ExpEntryEx* expEx = expData + i;
-
-                    memcpy((void *)expEx, (const void *)&exp, sizeof(ExpEntry));
-                    expEx->next = nullptr;
-
-                    //Merge
-                    if (!link_entry(expEx))
-                        duplicateMoves++;
-                }
-
-                //Add buffer to vector so that it will be released later
-                _expExData.push_back(expData);
-
-                //Show some statistics
-                if (prevPosCount)
-                {
-                    sync_cout
-                        << "info string " << filename << " -> Total new moves: " << expCount
-                        << ". Total new positions: " << (_mainExp.size() - prevPosCount)
-                        << ". Duplicate moves: " << duplicateMoves
-                        << sync_endl;
-                }
-                else
-                {
-                    sync_cout
-                        << "info string " << filename << " -> Total moves: " << expCount
-                        << ". Total positions: " << _mainExp.size()
-                        << ". Duplicate moves: " << duplicateMoves
-                        << ". Fragmentation: " << std::setprecision(2) << std::fixed << 100.0 * (double)duplicateMoves / (double)expCount << "%"
-                        << sync_endl;
-                }
-
-                return true;
+            bool wait_for_load_finished()
+            {
+                std::unique_lock<std::mutex> ul(_loaderMutex);
+                _loadingCond.wait(ul, [&] { return !_loading; });
+                return _loadingResult;
             }
 
             void save(string filename, bool saveAll)
             {
+                //Make sure we are not already in the process of loading same/other experience file
+                wait_for_load_finished();
+
                 if (!has_new_exp() && (!saveAll || _mainExp.size() == 0))
                     return;
 
@@ -414,12 +502,12 @@ namespace Experience
 
             void add_pv_experience(Key k, Move m, Value v, Depth d)
             {
-                _newPvExp.emplace_back(k, m, v, d);
+                _newPvExp.emplace_back(new ExpEntry(k, m, v, d));
             }
 
             void add_multipv_experience(Key k, Move m, Value v, Depth d)
             {
-                _newMultiPvExp.emplace_back(k, m, v, d);
+                _newMultiPvExp.emplace_back(new ExpEntry(k, m, v, d));
             }
         };
 
@@ -430,15 +518,10 @@ namespace Experience
     void init()
     {
         assert(currentExperience == nullptr);
-
-        //Just to be safe
-        unload();
-
-        currentExperience = new ExperienceData();
-        currentExperience->load(Utility::map_path(ExperienceFilename));
+        load(true);
     }
 
-    bool load(bool releaseExisting)
+    void load(bool releaseExisting)
     {
         if(releaseExisting)
             unload();
@@ -446,7 +529,7 @@ namespace Experience
         if(!currentExperience)
             currentExperience = new ExperienceData();
 
-        return currentExperience->load(Utility::map_path(ExperienceFilename));
+        currentExperience->load(Utility::map_path(ExperienceFilename), false);
     }
 
     void unload()
@@ -481,6 +564,14 @@ namespace Experience
         return currentExperience->probe(k);
     }
 
+    void wait_for_loading_finished()
+    {
+        if (!currentExperience)
+            return;
+
+        currentExperience->wait_for_load_finished();
+    }
+
     //Defrag command:
     //Format:  defrag [filename]
     //Example: defrag C:\Path to\Experience\file.exp
@@ -506,7 +597,7 @@ namespace Experience
 
         //Load
         ExperienceData exp;
-        if (!exp.load(filename))
+        if (!exp.load(filename, true))
             return;
 
         //Save
@@ -549,7 +640,7 @@ namespace Experience
         //Step 4: Load and merge
         ExperienceData exp;
         for (const string& fn : filenames)
-            exp.load(fn);
+            exp.load(fn, true);
 
         exp.save(targetFilename, true);
     }
