@@ -20,7 +20,6 @@
 #include <cassert>
 #include <ostream>
 #include <sstream>
-#include <iostream>
 
 #include "evaluate.h"
 #include "misc.h"
@@ -30,6 +29,7 @@
 #include "uci.h"
 #include "syzygy/tbprobe.h"
 #include "polybook.h"
+#include "experience.h"
 
 using std::string;
 
@@ -52,6 +52,8 @@ void on_book_file(const Option& o) { polybook.init(o); }
 void on_book_file2(const Option& o) { polybook2.init(o); }
 void on_best_book_move(const Option& o) { polybook.set_best_book_move(o); }
 void on_book_depth(const Option& o) { polybook.set_book_depth(o); }
+void on_exp_enabled(const Option& /*o*/) { Experience::init(); }
+void on_exp_file(const Option& /*o*/) { Experience::init(); }
 void on_use_NNUE(const Option& ) { Eval::NNUE::init(); }
 void on_eval_file(const Option& ) { Eval::NNUE::init(); }
 
@@ -103,6 +105,8 @@ void init(OptionsMap& o) {
   o["BookFile2"]                 << Option("<empty>", on_book_file2);
   o["BestBookMove"]              << Option(false, on_best_book_move);
   o["BookDepth"]                 << Option(300, 1, 350, on_book_depth);
+  o["Experience Enabled"]        << Option(true, on_exp_enabled);
+  o["Experience File"]           << Option("SugaR.exp", on_exp_file);
   o["Experience Readonly"]       << Option(false);
   o["Experience Book"]           << Option(false);
   o["Experience Book Best Move"] << Option(true);

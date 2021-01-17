@@ -43,13 +43,13 @@ namespace Experience
 
     namespace
     {
-        const char *ExperienceFilename = "SugaR.exp";
         const char *ExperienceSignature = "SugaR";
         const size_t ExperienceSignatureLength = strlen(ExperienceSignature) * sizeof(char);
         
         class ExperienceData
         {
         private:
+            string                  _filename;
             vector<ExpEntryEx*>     _expExData;
 
             ExpMap                  _mainExp;
@@ -151,19 +151,19 @@ namespace Experience
                 return true;
             }
 
-            bool _load(string filename)
+            bool _load(string fn)
             {
-                ifstream in(filename, ios::in | ios::binary | ios::ate);
+                ifstream in(Utility::map_path(fn), ios::in | ios::binary | ios::ate);
                 if (!in.is_open())
                 {
-                    sync_cout << "info string Could not open experience file: " << filename << sync_endl;
+                    sync_cout << "info string Could not open experience file: " << fn << sync_endl;
                     return false;
                 }
 
                 size_t inSize = in.tellg();
                 if (inSize == 0)
                 {
-                    sync_cout << "info string The experience file [" << filename << "] is empty" << sync_endl;
+                    sync_cout << "info string The experience file [" << fn << "] is empty" << sync_endl;
                     return false;
                 }
 
@@ -171,7 +171,7 @@ namespace Experience
                 size_t expCount = expDataSize / sizeof(ExpEntry);
                 if (expCount * sizeof(ExpEntry) != expDataSize)
                 {
-                    sync_cout << "info string Experience file [" << filename << "] is corrupted. Size: " << inSize << ", exp-size: " << expDataSize << ", exp-count: " << expCount << sync_endl;
+                    sync_cout << "info string Experience file [" << fn << "] is corrupted. Size: " << inSize << ", exp-size: " << expDataSize << ", exp-count: " << expCount << sync_endl;
                     return false;
                 }
 
@@ -196,7 +196,7 @@ namespace Experience
                 {
                     free(sig);
 
-                    sync_cout << "info string Experience file [" << filename << "] signature missmatch " << sync_endl;
+                    sync_cout << "info string Experience file [" << fn << "] signature missmatch " << sync_endl;
                     return false;
                 }
 
@@ -207,7 +207,7 @@ namespace Experience
                 ExpEntryEx* expData = (ExpEntryEx*)malloc(expCount * sizeof(ExpEntryEx));
                 if (!expData)
                 {
-                    sync_cout << "info string Failed to allocate " << expCount * sizeof(ExpEntryEx) << " bytes for stored experience data from file [" << filename << "]" << sync_endl;
+                    sync_cout << "info string Failed to allocate " << expCount * sizeof(ExpEntryEx) << " bytes for stored experience data from file [" << fn << "]" << sync_endl;
                     return false;
                 }
 
@@ -250,7 +250,7 @@ namespace Experience
                 if (prevPosCount)
                 {
                     sync_cout
-                        << "info string " << filename << " -> Total new moves: " << expCount
+                        << "info string " << fn << " -> Total new moves: " << expCount
                         << ". Total new positions: " << (_mainExp.size() - prevPosCount)
                         << ". Duplicate moves: " << duplicateMoves
                         << sync_endl;
@@ -258,7 +258,7 @@ namespace Experience
                 else
                 {
                     sync_cout
-                        << "info string " << filename << " -> Total moves: " << expCount
+                        << "info string " << fn << " -> Total moves: " << expCount
                         << ". Total positions: " << _mainExp.size()
                         << ". Duplicate moves: " << duplicateMoves
                         << ". Fragmentation: " << std::setprecision(2) << std::fixed << 100.0 * (double)duplicateMoves / (double)expCount << "%"
@@ -268,13 +268,13 @@ namespace Experience
                 return true;
             }
 
-            bool _save(string filename, bool saveAll)
+            bool _save(string fn, bool saveAll)
             {
                 fstream out;
-                out.open(filename, ios::out | ios::binary | ios::app);
+                out.open(Utility::map_path(fn), ios::out | ios::binary | ios::app);
                 if (!out.is_open())
                 {
-                    sync_cout << "info string Failed to open experience file [" << filename << "] for writing" << sync_endl;
+                    sync_cout << "info string Failed to open experience file [" << fn << "] for writing" << sync_endl;
                     return false;
                 }
 
@@ -289,7 +289,7 @@ namespace Experience
 
                     if (!out.write(ExperienceSignature, ExperienceSignatureLength))
                     {
-                        sync_cout << "info string Failed to write signature to experience file [" << filename << "]" << sync_endl;
+                        sync_cout << "info string Failed to write signature to experience file [" << fn << "]" << sync_endl;
                         return false;
                     }
                 }
@@ -333,7 +333,7 @@ namespace Experience
                     out.write((const char*)e, sizeof(ExpEntry));
                     if (!out)
                     {
-                        sync_cout << "info string Failed to save new PV experience entry to experience file [" << filename << "]" << sync_endl;
+                        sync_cout << "info string Failed to save new PV experience entry to experience file [" << fn << "]" << sync_endl;
                         return false;
                     }
 
@@ -354,7 +354,7 @@ namespace Experience
 
                     if (!out)
                     {
-                        sync_cout << "info string Failed to save new MultiPV experience entry to experience file [" << filename << "]" << sync_endl;
+                        sync_cout << "info string Failed to save new MultiPV experience entry to experience file [" << fn << "]" << sync_endl;
                         return false;
                     }
 
@@ -366,11 +366,11 @@ namespace Experience
 
                 if (saveAll)
                 {
-                    sync_cout << "info string Saved " << allPositions << " position(s) and " << allMoves << " moves to experience file: " << filename << sync_endl;
+                    sync_cout << "info string Saved " << allPositions << " position(s) and " << allMoves << " moves to experience file: " << fn << sync_endl;
                 }
                 else
                 {
-                    sync_cout << "info string Saved " << newPvExpCount << " PV and " << newMultiPvExpCount << " MultiPV entries to experience file: " << filename << sync_endl;
+                    sync_cout << "info string Saved " << newPvExpCount << " PV and " << newMultiPvExpCount << " MultiPV entries to experience file: " << fn << sync_endl;
                 }
 
                 return true;
@@ -390,6 +390,11 @@ namespace Experience
                 clear();
             }
 
+            string filename() const
+            {
+                return _filename;
+            }
+
             bool has_new_exp() const
             {
                 return _newPvExp.size() || _newMultiPvExp.size();
@@ -401,6 +406,7 @@ namespace Experience
                 wait_for_load_finished();
 
                 //Load requested experience file
+                _filename = filename;
                 _loadingResult = false;
 
                 //Block
@@ -411,6 +417,8 @@ namespace Experience
                         {
                             //Load
                             _loadingResult = _load(filename);
+                            if (!_loadingResult)
+                                _filename.clear();
 
                             //Notify
                             {
@@ -436,7 +444,7 @@ namespace Experience
                 return _loadingResult;
             }
 
-            void save(string filename, bool saveAll)
+            void save(string fn, bool saveAll)
             {
                 //Make sure we are not already in the process of loading same/other experience file
                 wait_for_load_finished();
@@ -445,10 +453,11 @@ namespace Experience
                     return;
 
                 //Step 1: Create backup only if 'saveAll' is 'true'
+                string expFilename = Utility::map_path(fn);
                 string backupExpFilename;
-                if (saveAll && Utility::file_exists(filename))
+                if (saveAll && Utility::file_exists(expFilename))
                 {
-                    backupExpFilename = filename + ".bak";
+                    backupExpFilename = expFilename + ".bak";
 
                     //If backup file already exists then delete it
                     if (Utility::file_exists(backupExpFilename))
@@ -465,7 +474,7 @@ namespace Experience
                     //Rename current experience file
                     if (!backupExpFilename.empty())
                     {
-                        if (rename(filename.c_str(), backupExpFilename.c_str()) != 0)
+                        if (rename(expFilename.c_str(), backupExpFilename.c_str()) != 0)
                         {
                             sync_cout << "info string Could not create backup of current experience file" << sync_endl;
 
@@ -476,12 +485,12 @@ namespace Experience
                 }
 
                 //Step 2: Save
-                if (!_save(filename, saveAll))
+                if (!_save(fn, saveAll))
                 {
                     //Step 2a: Restore backup in case of failure while saving
                     if (!backupExpFilename.empty())
                     {
-                        if (rename(backupExpFilename.c_str(), filename.c_str()) != 0)
+                        if (rename(backupExpFilename.c_str(), expFilename.c_str()) != 0)
                         {
                             sync_cout << "info string Could not restore backup experience file: " << backupExpFilename << sync_endl;
                         }
@@ -512,24 +521,36 @@ namespace Experience
         };
 
         ExperienceData*currentExperience = nullptr;
-        bool isLearningPaused = false;
+        bool experienceEnabled = true;
+        bool learningPaused = false;
     }
 
     void init()
     {
-        assert(currentExperience == nullptr);
-        load(true);
+        experienceEnabled = Options["Experience Enabled"];
+        if (!experienceEnabled)
+        {
+            unload();
+            return;
+        }
+
+        string filename = Options["Experience File"];
+        if (currentExperience)
+        {
+            if (currentExperience->filename() == filename)
+                return;
+
+            if (currentExperience)
+                unload();
+        }
+
+        currentExperience = new ExperienceData();
+        currentExperience->load(filename, false);
     }
 
-    void load(bool releaseExisting)
+    bool enabled()
     {
-        if(releaseExisting)
-            unload();
-
-        if(!currentExperience)
-            currentExperience = new ExperienceData();
-
-        currentExperience->load(Utility::map_path(ExperienceFilename), false);
+        return experienceEnabled;
     }
 
     void unload()
@@ -545,7 +566,7 @@ namespace Experience
         if (!currentExperience || !currentExperience->has_new_exp() || (bool)Options["Experience Readonly"])
             return;
 
-        currentExperience->save(Utility::map_path(ExperienceFilename), false);
+        currentExperience->save(currentExperience->filename(), false);
     }
 
     void reload()
@@ -553,11 +574,12 @@ namespace Experience
         if (!currentExperience || !currentExperience->has_new_exp())
             return;
 
-        load(true);
+        init();
     }
 
     const ExpEntryEx* probe(Key k)
     {
+        assert(experienceEnabled);
         if (!currentExperience)
             return nullptr;
 
@@ -579,15 +601,14 @@ namespace Experience
     //         'filename' can contain spaces and can be a full path. If filename contains spaces, it is best to enclose it in quotations
     void defrag(int argc, char* argv[])
     {
-        if (argc > 3)
+        if (argc != 3)
         {
             sync_cout << "info string Error : Incorrect defrag command" << sync_endl;
             sync_cout << "info string Syntax: defrag [filename]" << sync_endl;
-            sync_cout << "info string filename is optional. If omitted, the default filename (" << ExperienceFilename << ") is used" << sync_endl;
             return;
         }
 
-        string filename = Utility::map_path(argc == 2 ? ExperienceFilename : Utility::unquote(argv[2]));
+        string filename = Utility::map_path(Utility::unquote(argv[2]));
 
         //Print message
         sync_cout << "\nDefragmenting experience file: " << filename << sync_endl;
@@ -616,7 +637,7 @@ namespace Experience
         if (argc < 4)
         {
             sync_cout << "info string Error : Incorrect merge command" << sync_endl;
-            sync_cout << "info string Syntax: defrag <filename> <filename1> [filename2] ... [filenameX]" << sync_endl;
+            sync_cout << "info string Syntax: merge <filename> <filename1> [filename2] ... [filenameX]" << sync_endl;
             sync_cout << "info string The first <filename> is also the target experience file which will contain all the merged data" << sync_endl;
             sync_cout << "info string The files <filename1> ... <filenameX> are the other experience files to be merged" << sync_endl;
             return;
@@ -647,17 +668,17 @@ namespace Experience
 
     void pause_learning()
     {
-        isLearningPaused = true;
+        learningPaused = true;
     }
 
     void resume_learning()
     {
-        isLearningPaused = false;
+        learningPaused = false;
     }
 
     bool is_learning_paused()
     {
-        return isLearningPaused;
+        return learningPaused;
     }
 
     void add_pv_experience(Key k, Move m, Value v, Depth d)
