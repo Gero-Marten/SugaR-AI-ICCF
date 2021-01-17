@@ -1,6 +1,6 @@
 /*
   SugaR, a UCI chess playing engine derived from Stockfish
-  Copyright (C) 2004-2020 The Stockfish developers (see AUTHORS file)
+  Copyright (C) 2004-2021 The Stockfish developers (see AUTHORS file)
 
   SugaR is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -184,7 +184,7 @@ template <int MoveType> inline Move test_move(Position &pos, Square fromsquare, 
 	}
 	else if (MoveType == SAN_PAWN_CAPTURE) {
 		if (pos.ep_square() == tosquare) {
-			move = make<ENPASSANT>(fromsquare, tosquare);
+			move = make<EN_PASSANT>(fromsquare, tosquare);
 		}
 		else {
 			if (promotion != NO_PIECE_TYPE) {

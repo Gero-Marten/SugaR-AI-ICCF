@@ -1,6 +1,6 @@
 /*
   SugaR, a UCI chess playing engine derived from Stockfish
-  Copyright (C) 2004-2020 The Stockfish developers (see AUTHORS file)
+  Copyright (C) 2004-2021 The Stockfish developers (see AUTHORS file)
 
   SugaR is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -1285,7 +1285,7 @@ bool Position::legal(Move m) const {
   // En passant captures are a tricky special case. Because they are rather
   // uncommon, we do it simply by testing whether the king is attacked after
   // the move is made.
-  if (type_of(m) == ENPASSANT)
+  if (type_of(m) == EN_PASSANT)
   {
       Square ksq = square<KING>(us);
       Square capsq = to - pawn_push(us);
@@ -1434,7 +1434,7 @@ bool Position::gives_check(Move m) const {
   // of direct checks and ordinary discovered check, so the only case we
   // need to handle is the unusual case of a discovered check through
   // the captured pawn.
-  case ENPASSANT:
+  case EN_PASSANT:
   {
       Square capsq = make_square(file_of(to), rank_of(from));
       Bitboard b = (pieces() ^ from ^ capsq) | to;
@@ -1494,7 +1494,7 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
   Square from = from_sq(m);
   Square to = to_sq(m);
   Piece pc = piece_on(from);
-  Piece captured = type_of(m) == ENPASSANT ? make_piece(them, PAWN) : piece_on(to);
+  Piece captured = type_of(m) == EN_PASSANT ? make_piece(them, PAWN) : piece_on(to);
 
   assert(color_of(pc) == us);
   assert(captured == NO_PIECE || color_of(captured) == (type_of(m) != CASTLING ? them : us));
@@ -1520,7 +1520,7 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
       // update non-pawn material.
       if (type_of(captured) == PAWN)
       {
-          if (type_of(m) == ENPASSANT)
+          if (type_of(m) == EN_PASSANT)
           {
               capsq -= pawn_push(us);
 
@@ -1547,7 +1547,7 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
       // Update board and piece lists
       remove_piece(capsq);
 
-      if (type_of(m) == ENPASSANT)
+      if (type_of(m) == EN_PASSANT)
           board[capsq] = NO_PIECE;
 
       // Update material hash key and prefetch access to materialTable
@@ -1593,7 +1593,7 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
   // If the moving piece is a pawn do some special extra work
   if (type_of(pc) == PAWN)
   {
-      // Set en-passant square if the moved pawn can be captured
+      // Set en passant square if the moved pawn can be captured
       if (   (int(to) ^ int(from)) == 16
           && (pawn_attacks_bb(us, to - pawn_push(us)) & pieces(them, PAWN)))
       {
@@ -1716,7 +1716,7 @@ void Position::undo_move(Move m) {
       {
           Square capsq = to;
 
-          if (type_of(m) == ENPASSANT)
+          if (type_of(m) == EN_PASSANT)
           {
               capsq -= pawn_push(us);
 
@@ -1820,7 +1820,7 @@ void Position::undo_null_move() {
 
 /// Position::key_after() computes the new hash key after the given move. Needed
 /// for speculative prefetch. It doesn't recognize special moves like castling,
-/// en-passant and promotions.
+/// en passant and promotions.
 
 Key Position::key_after(Move m) const {
 

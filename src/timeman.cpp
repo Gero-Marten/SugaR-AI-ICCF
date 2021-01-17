@@ -1,6 +1,6 @@
 /*
   SugaR, a UCI chess playing engine derived from Stockfish
-  Copyright (C) 2004-2020 The Stockfish developers (see AUTHORS file)
+  Copyright (C) 2004-2021 The Stockfish developers (see AUTHORS file)
 
   SugaR is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -33,8 +33,7 @@ TimeManagement Time; // Our global time management object
 //      2) x moves in y seconds (+ z increment)
 
 void TimeManagement::init(Search::LimitsType& limits, Color us, int ply) {
-	
-  TimePoint minThinkingTime = TimePoint(Options["Minimum Thinking Time"]);
+
   TimePoint moveOverhead    = TimePoint(Options["Move Overhead"]);
   TimePoint slowMover       = TimePoint(Options["Slow Mover"]);
   TimePoint npmsec          = TimePoint(Options["nodestime"]);
@@ -90,7 +89,7 @@ void TimeManagement::init(Search::LimitsType& limits, Color us, int ply) {
   }
 
   // Never use more than 80% of the available time for this move
-  optimumTime = std::max(minThinkingTime, TimePoint(optScale * timeLeft));
+  optimumTime = TimePoint(optScale * timeLeft);
   maximumTime = TimePoint(std::min(0.8 * limits.time[us] - moveOverhead, maxScale * optimumTime));
 
   if (Options["Ponder"])
