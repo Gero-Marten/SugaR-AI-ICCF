@@ -102,8 +102,8 @@ namespace Experience
     };
 
     void init();
+    bool enabled();
 
-    void load(bool releaseExisting);
     void unload();
     void save();
     void reload();
