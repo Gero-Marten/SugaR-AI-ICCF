@@ -58,7 +58,7 @@ namespace Experience
 
             bool                    _loading;
             std::atomic<bool>       _abortLoading;      //Only used when destructing
-            bool                    _loadingResult;
+            std::atomic<bool>       _loadingResult;
             std::thread             *_loaderThread;
             std::condition_variable _loadingCond;
             std::mutex              _loaderMutex;
@@ -381,7 +381,7 @@ namespace Experience
             {
                 _loading = false;
                 _abortLoading.store(false, std::memory_order_relaxed);
-                _loadingResult = false;
+                _loadingResult.store(false, std::memory_order_relaxed);
                 _loaderThread = nullptr;
             }
 
@@ -407,7 +407,7 @@ namespace Experience
 
                 //Load requested experience file
                 _filename = filename;
-                _loadingResult = false;
+                _loadingResult.store(false, std::memory_order_relaxed);
 
                 //Block
                 {
@@ -416,9 +416,8 @@ namespace Experience
                     _loaderThread = new std::thread(std::thread([this, filename]()
                         {
                             //Load
-                            _loadingResult = _load(filename);
-                            if (!_loadingResult)
-                                _filename.clear();
+                            bool loadingResult = _load(filename);
+                            _loadingResult.store(loadingResult, std::memory_order_relaxed);
 
                             //Notify
                             {
@@ -441,7 +440,12 @@ namespace Experience
             {
                 std::unique_lock<std::mutex> ul(_loaderMutex);
                 _loadingCond.wait(ul, [&] { return !_loading; });
-                return _loadingResult;
+                return loading_result();
+            }
+
+            bool loading_result() const
+            {
+                return _loadingResult.load(std::memory_order_relaxed);
             }
 
             void save(string fn, bool saveAll)
@@ -537,7 +541,7 @@ namespace Experience
         string filename = Options["Experience File"];
         if (currentExperience)
         {
-            if (currentExperience->filename() == filename)
+            if (currentExperience->filename() == filename && currentExperience->loading_result())
                 return;
 
             if (currentExperience)
