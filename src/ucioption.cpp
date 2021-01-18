@@ -82,7 +82,6 @@ void init(OptionsMap& o) {
   o["Clean Search"]              << Option(false);
   o["Ponder"]                    << Option(false);
   o["MultiPV"]                   << Option(1, 1, 500);
-  o["NullMove"]                  << Option(true);
   o["Move Overhead"]             << Option(10, 0, 5000);
   o["Minimum Thinking Time"]     << Option( 0, 0, 5000);
   o["Slow Mover"]                << Option(100, 10, 1000);
