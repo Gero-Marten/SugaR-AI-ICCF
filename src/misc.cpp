@@ -81,7 +81,7 @@ namespace {
 
 /// Version number. If Version is left empty, then compile date in the format
 /// DD-MM-YY and show in engine_info.
-const string Version = "";
+const string Version = " ";
 
 /// Our fancy logging facility. The trick here is to replace cin.rdbuf() and
 /// cout.rdbuf() with two Tie objects that tie cin and cout to a file stream. We
@@ -244,7 +244,7 @@ const string engine_info(bool to_uci) {
   string month, day, year;
   stringstream ss, date(__DATE__); // From compiler, format is "Sep 21 2008"
 
-  ss << "SugaR AI ICCF 1.40a " << Version << setfill('0');
+  ss << "SugaR AI ICCF 1.50 " << Version << setfill('0');
 
   ss << (to_uci  ? "\nid author ": " by ")
      << "Stockfish Team, Marco Zerbinati, Khalid Omar";
@@ -320,6 +320,39 @@ const std::string compiler_info() {
      compiler += " on Microsoft Windows 32-bit";
   #else
      compiler += " on unknown system";
+  #endif
+
+  compiler += "\nCompilation settings include: ";
+  compiler += (Is64Bit ? " 64bit" : " 32bit");
+  #if defined(USE_VNNI)
+    compiler += " VNNI";
+  #endif
+  #if defined(USE_AVX512)
+    compiler += " AVX512";
+  #endif
+  compiler += (HasPext ? " BMI2" : "");
+  #if defined(USE_AVX2)
+    compiler += " AVX2";
+  #endif
+  #if defined(USE_SSE41)
+    compiler += " SSE41";
+  #endif
+  #if defined(USE_SSSE3)
+    compiler += " SSSE3";
+  #endif
+  #if defined(USE_SSE2)
+    compiler += " SSE2";
+  #endif
+  compiler += (HasPopCnt ? " POPCNT" : "");
+  #if defined(USE_MMX)
+    compiler += " MMX";
+  #endif
+  #if defined(USE_NEON)
+    compiler += " NEON";
+  #endif
+
+  #if !defined(NDEBUG)
+    compiler += " DEBUG";
   #endif
 
   compiler += "\n__VERSION__ macro expands to: ";

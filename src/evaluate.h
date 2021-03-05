@@ -37,7 +37,7 @@ namespace Eval {
   // for the build process (profile-build and fishtest) to work. Do not change the
   // name of the macro, as it is used in the Makefile.
   #define EvalFileDefaultName   "nn-62ef826d1a6d.nnue"
-
+  
   namespace NNUE {
 
     Value evaluate(const Position& pos);
