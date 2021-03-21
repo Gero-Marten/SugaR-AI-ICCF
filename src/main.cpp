@@ -32,9 +32,7 @@
 #include "experience.h"
 #include "syzygy/tbprobe.h"
 
-namespace PSQT {
-  void init();
-}
+using namespace Stockfish;
 
 int main(int argc, char* argv[]) {
 
@@ -48,7 +46,6 @@ int main(int argc, char* argv[]) {
 
   std::cout
       << "Operating System (OS) : " << SysInfo::os_info() << std::endl
-																
       << "CPU Brand             : " << SysInfo::processor_brand() << std::endl
       << "NUMA Nodes            : " << SysInfo::numa_nodes() << std::endl
       << "Cores                 : " << SysInfo::physical_cores() << std::endl

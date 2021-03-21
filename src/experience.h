@@ -24,23 +24,23 @@
 
 using namespace std;
 
-#define MIN_EXP_DEPTH       4
+#define MIN_EXP_DEPTH       ((Depth)4)
 
 namespace Experience
 {
     struct ExpEntry
     {
-        Key     key;        //8 bytes
-        Move    move;       //4 bytes
-        Value   value;      //4 bytes
-        Depth   depth;      //4 bytes
-        uint8_t padding[4]; //4 bytes
+        Stockfish::Key     key;        //8 bytes
+        Stockfish::Move    move;       //4 bytes
+        Stockfish::Value   value;      //4 bytes
+        Stockfish::Depth   depth;      //4 bytes
+        uint8_t padding[4];            //4 bytes
 
         ExpEntry() = delete;
         ExpEntry(const ExpEntry& exp) = delete;
         ExpEntry& operator =(const ExpEntry& exp) = delete;
         
-        inline explicit ExpEntry(Key k, Move m, Value v, Depth d)
+        inline explicit ExpEntry(Stockfish::Key k, Stockfish::Move m, Stockfish::Value v, Stockfish::Depth d)
         {
             key = k;
             move = m;
@@ -86,7 +86,7 @@ namespace Experience
         ExpEntryEx(const ExpEntryEx& expEx) = delete;
         ExpEntryEx &operator =(const ExpEntryEx& expEx) = delete;
 
-        inline ExpEntryEx* find(Move m)
+        inline ExpEntryEx* find(Stockfish::Move m)
         {
             ExpEntryEx* expEx = this;
             do
@@ -110,17 +110,19 @@ namespace Experience
 
     void wait_for_loading_finished();
 
-    const ExpEntryEx* probe(Key k);
+    const ExpEntryEx* probe(Stockfish::Key k);
 
     void defrag(int argc, char* argv[]);
     void merge(int argc, char* argv[]);
+    void show_exp(Stockfish::Position& pos, bool extended);
+    void convert_compact_pgn(int argc, char* argv[]);
 
     void pause_learning();
     void resume_learning();
     bool is_learning_paused();
 
-    void add_pv_experience(Key k, Move m, Value v, Depth d);
-    void add_multipv_experience(Key k, Move m, Value v, Depth d);  
+    void add_pv_experience(Stockfish::Key k, Stockfish::Move m, Stockfish::Value v, Stockfish::Depth d);
+    void add_multipv_experience(Stockfish::Key k, Stockfish::Move m, Stockfish::Value v, Stockfish::Depth d);
 }
 
 #endif

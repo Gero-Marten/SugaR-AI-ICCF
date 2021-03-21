@@ -27,18 +27,17 @@
 #endif
 
 #include <windows.h>
-#include <tchar.h>
+#include "VersionHelpers.h"
+
 // The needed Windows API for processor groups could be missed from old Windows
 // versions, so instead of calling them directly (forcing the linker to resolve
 // the calls at compile time), try to load them at runtime. To do this we need
 // first to define the corresponding function pointers.
 extern "C" {
-typedef bool(WINAPI *fun1_t)(LOGICAL_PROCESSOR_RELATIONSHIP,
+typedef bool(*fun1_t)(LOGICAL_PROCESSOR_RELATIONSHIP,
                       PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, PDWORD);
-typedef bool(WINAPI *fun2_t)(USHORT, PGROUP_AFFINITY);
-typedef bool(WINAPI *fun3_t)(HANDLE, CONST GROUP_AFFINITY*, PGROUP_AFFINITY);
-
-#include "VersionHelpers.h"
+typedef bool(*fun2_t)(USHORT, PGROUP_AFFINITY);
+typedef bool(*fun3_t)(HANDLE, CONST GROUP_AFFINITY*, PGROUP_AFFINITY);
 }
 #endif
 
@@ -77,11 +76,13 @@ typedef bool(WINAPI *fun3_t)(HANDLE, CONST GROUP_AFFINITY*, PGROUP_AFFINITY);
 
 using namespace std;
 
+namespace Stockfish {
+
 namespace {
 
 /// Version number. If Version is left empty, then compile date in the format
 /// DD-MM-YY and show in engine_info.
-const string Version = " ";
+const string Version = "";
 
 /// Our fancy logging facility. The trick here is to replace cin.rdbuf() and
 /// cout.rdbuf() with two Tie objects that tie cin and cout to a file stream. We
@@ -238,13 +239,13 @@ namespace Utility
 /// the program was compiled) or "SugaR <Version>", depending on whether
 /// Version is empty.
 
-const string engine_info(bool to_uci) {
+string engine_info(bool to_uci) {
 
   const string months("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec");
   string month, day, year;
   stringstream ss, date(__DATE__); // From compiler, format is "Sep 21 2008"
 
-  ss << "SugaR AI ICCF 1.50 " << Version << setfill('0');
+  ss << "SugaR AI ICCF 1.60 " << Version << setfill('0');
 
   ss << (to_uci  ? "\nid author ": " by ")
      << "Stockfish Team, Marco Zerbinati, Khalid Omar";
@@ -265,7 +266,7 @@ const string engine_info(bool to_uci) {
 
 /// compiler_info() returns a string trying to describe the compiler we use
 
-const std::string compiler_info() {
+std::string compiler_info() {
 
   #define stringify2(x) #x
   #define stringify(x) stringify2(x)
@@ -1138,7 +1139,7 @@ void std_aligned_free(void* ptr) {
 /// aligned_large_pages_alloc() will return suitably aligned memory, if possible using large pages.
 
 #if defined(_WIN32)
-
+#if defined(_WIN64)
 static void* aligned_large_pages_alloc_win(size_t allocSize) {
 
   HANDLE hProcessToken { };
@@ -1183,15 +1184,20 @@ static void* aligned_large_pages_alloc_win(size_t allocSize) {
 
   return mem;
 }
+#endif
 
 void* aligned_large_pages_alloc(size_t allocSize) {
 
+#if defined(_WIN64)
   // Try to allocate large pages
   void* mem = aligned_large_pages_alloc_win(allocSize);
 
   // Fall back to regular, page aligned, allocation if necessary
   if (!mem)
       mem = VirtualAlloc(NULL, allocSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
+  void* mem = VirtualAlloc(NULL, allocSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#endif
 
   return mem;
 }
@@ -1404,3 +1410,5 @@ void init(int argc, char* argv[]) {
 
 
 } // namespace CommandLine
+
+} // namespace Stockfish

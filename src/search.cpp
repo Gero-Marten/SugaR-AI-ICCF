@@ -39,6 +39,9 @@
 
 #include "experience.h"
 
+
+namespace Stockfish {
+
 namespace Search {
 
   LimitsType Limits;
@@ -300,6 +303,16 @@ void MainThread::search() {
                           }
 
                           nextPosExpEx = Experience::probe(rootPos.key());
+
+                          //Find best next experience move (shallow search)
+                          const Experience::ExpEntryEx* t = nextPosExpEx ? nextPosExpEx->next : nullptr;
+                          while (t)
+                          {
+                              if (t->compare(nextPosExpEx))
+                                  nextPosExpEx = t;
+
+                              t = t->next;
+                          }
                       }
 
                       if (exp.size())
@@ -327,7 +340,7 @@ void MainThread::search() {
                   };
 
                   //Find best experience move (algorithm is similar to Thread::get_best_thread())
-                  //Step 1: Find minimum score of all threads
+                  //Step 1: Find minimum score of all exp moves
                   Value minExpectedScore = VALUE_NONE;
                   tempExpEx = expEx;
                   while (tempExpEx)
@@ -652,7 +665,7 @@ void Thread::search() {
           // high/low anymore.
           while (true)
           {
-              bestValue = ::search<PV>(rootPos, ss, alpha, beta, rootDepth - searchAgainCounter, false);
+              bestValue = Stockfish::search<PV>(rootPos, ss, alpha, beta, rootDepth - searchAgainCounter, false);
 
               // Bring the best move to the front. It is critical that sorting
               // is done with a stable algorithm because all the values but the
@@ -1915,14 +1928,12 @@ namespace {
 
       if (!PvNode && bestValue > VALUE_TB_LOSS_IN_MAX_PLY)
       {
-         // Futility pruning
+         // Futility pruning and moveCount pruning
          if (   !givesCheck
              &&  futilityBase > -VALUE_KNOWN_WIN
-             && !pos.advanced_pawn_push(move))
+             &&  type_of(move) != PROMOTION)
          {
-             assert(type_of(move) != EN_PASSANT); // Due to !pos.advanced_pawn_push
 
-             // moveCount pruning
              if (moveCount > 2)
                  continue;
 
@@ -2244,7 +2255,7 @@ string UCI::pv(const Position& pos, Depth depth, Value alpha, Value beta) {
          << " multipv "  << i + 1
          << " score "    << UCI::value(v, v2);
 
-      if (Options["ShowWDL"])
+      if (Options["UCI_ShowWDL"])
           ss << UCI::wdl(v, pos.game_ply());
 
       if (!tb && i == pvIdx)
@@ -2339,3 +2350,5 @@ void Tablebases::rank_root_moves(Position& pos, Search::RootMoves& rootMoves) {
             m.tbRank = 0;
     }
 }
+
+} // namespace Stockfish

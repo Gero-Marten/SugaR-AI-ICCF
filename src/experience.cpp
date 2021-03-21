@@ -31,9 +31,12 @@
 #include <atomic>
 #include "misc.h"
 #include "uci.h"
+#include "position.h"
+#include "thread.h"
 #include "experience.h"
 
 using namespace std;
+using namespace Stockfish;
 
 namespace Experience
 {
@@ -45,6 +48,12 @@ namespace Experience
     {
         const char *ExperienceSignature = "SugaR";
         const size_t ExperienceSignatureLength = strlen(ExperienceSignature) * sizeof(char);
+
+#ifndef NDEBUG
+        constexpr size_t WriteBufferSize = 1024;
+#else
+        constexpr size_t WriteBufferSize = 1024 * 1024 * 16;
+#endif
         
         class ExperienceData
         {
@@ -57,17 +66,17 @@ namespace Experience
             vector<ExpEntry*>       _newMultiPvExp;
 
             bool                    _loading;
-            std::atomic<bool>       _abortLoading;      //Only used when destructing
-            std::atomic<bool>       _loadingResult;
-            std::thread             *_loaderThread;
-            std::condition_variable _loadingCond;
-            std::mutex              _loaderMutex;
+            atomic<bool>            _abortLoading;      //Only used when destructing
+            atomic<bool>            _loadingResult;
+            thread                 *_loaderThread;
+            condition_variable      _loadingCond;
+            mutex                   _loaderMutex;
 
         private:
             void clear()
             {
                 //Make sure we are not loading an experience file
-                _abortLoading.store(true, std::memory_order_relaxed);
+                _abortLoading.store(true, memory_order_relaxed);
                 wait_for_load_finished();
                 assert(_loaderThread == nullptr);
 
@@ -218,7 +227,7 @@ namespace Experience
                 size_t duplicateMoves = 0;
                 for (size_t i = 0; i < expCount; i++)
                 {
-                    if (_abortLoading.load(std::memory_order_relaxed))
+                    if (_abortLoading.load(memory_order_relaxed))
                         break;
 
                     //Prepare to read
@@ -243,7 +252,7 @@ namespace Experience
                 _expExData.push_back(expData);
 
                 //Nothing to do if loading was aborted
-                if (_abortLoading.load(std::memory_order_relaxed))
+                if (_abortLoading.load(memory_order_relaxed))
                     return false;
 
                 //Show some statistics
@@ -261,7 +270,7 @@ namespace Experience
                         << "info string " << fn << " -> Total moves: " << expCount
                         << ". Total positions: " << _mainExp.size()
                         << ". Duplicate moves: " << duplicateMoves
-                        << ". Fragmentation: " << std::setprecision(2) << std::fixed << 100.0 * (double)duplicateMoves / (double)expCount << "%"
+                        << ". Fragmentation: " << setprecision(2) << fixed << 100.0 * (double)duplicateMoves / (double)expCount << "%"
                         << sync_endl;
                 }
 
@@ -297,6 +306,30 @@ namespace Experience
                 //Reposition writing pointer to end of file
                 out.seekp(ios::end);
 
+                vector<char> writeBuffer;
+                writeBuffer.reserve(WriteBufferSize);
+
+                auto write_entry = [&](const ExpEntry* exp, bool force) -> bool
+                {
+                    if (exp)
+                    {
+                        const char* data = reinterpret_cast<const char*>(exp);
+                        writeBuffer.insert(writeBuffer.end(), data, data + sizeof(ExpEntry));
+                    }
+
+                    bool success = true;
+                    if (force || writeBuffer.size() >= WriteBufferSize)
+                    {
+                        out.write(writeBuffer.data(), writeBuffer.size());
+                        if (!out)
+                            success = false;
+
+                        writeBuffer.clear();
+                    }
+
+                    return success;
+                };
+
                 size_t allMoves = 0;
                 size_t allPositions = 0;
                 if (saveAll)
@@ -312,7 +345,11 @@ namespace Experience
                             if (p->depth >= MIN_EXP_DEPTH)
                             {
                                 allMoves++;
-                                out.write((const char*)p, sizeof(ExpEntry));
+                                if (!write_entry(p, false))
+                                {
+                                    sync_cout << "info string Failed to save experience entry to experience file [" << fn << "]" << sync_endl;
+                                    return false;
+                                }
                             }
 
                             p = p->next;
@@ -330,8 +367,7 @@ namespace Experience
                     if (e->depth < MIN_EXP_DEPTH)
                         continue;
 
-                    out.write((const char*)e, sizeof(ExpEntry));
-                    if (!out)
+                    if (!write_entry(e, false))
                     {
                         sync_cout << "info string Failed to save new PV experience entry to experience file [" << fn << "]" << sync_endl;
                         return false;
@@ -350,9 +386,7 @@ namespace Experience
                     if (e->depth < MIN_EXP_DEPTH)
                         continue;
 
-                    out.write((const char*)e, sizeof(ExpEntry));
-
-                    if (!out)
+                    if (!write_entry(e, false))
                     {
                         sync_cout << "info string Failed to save new MultiPV experience entry to experience file [" << fn << "]" << sync_endl;
                         return false;
@@ -360,6 +394,9 @@ namespace Experience
 
                     newMultiPvExpCount++;
                 }
+
+                //Flush buffer
+                write_entry(nullptr, true);
 
                 //Clear new moves
                 clear_new_exp();
@@ -380,8 +417,8 @@ namespace Experience
             ExperienceData()
             {
                 _loading = false;
-                _abortLoading.store(false, std::memory_order_relaxed);
-                _loadingResult.store(false, std::memory_order_relaxed);
+                _abortLoading.store(false, memory_order_relaxed);
+                _loadingResult.store(false, memory_order_relaxed);
                 _loaderThread = nullptr;
             }
 
@@ -407,21 +444,21 @@ namespace Experience
 
                 //Load requested experience file
                 _filename = filename;
-                _loadingResult.store(false, std::memory_order_relaxed);
+                _loadingResult.store(false, memory_order_relaxed);
 
                 //Block
                 {
                     _loading = true;
-                    std::lock_guard<std::mutex> lg1(_loaderMutex);
-                    _loaderThread = new std::thread(std::thread([this, filename]()
+                    lock_guard<mutex> lg1(_loaderMutex);
+                    _loaderThread = new thread(thread([this, filename]()
                         {
                             //Load
                             bool loadingResult = _load(filename);
-                            _loadingResult.store(loadingResult, std::memory_order_relaxed);
+                            _loadingResult.store(loadingResult, memory_order_relaxed);
 
                             //Notify
                             {
-                                std::lock_guard<std::mutex> lg2(_loaderMutex);
+                                lock_guard<mutex> lg2(_loaderMutex);
                                 _loading = false;
                                 _loadingCond.notify_one();
                             }
@@ -438,14 +475,14 @@ namespace Experience
 
             bool wait_for_load_finished()
             {
-                std::unique_lock<std::mutex> ul(_loaderMutex);
+                unique_lock<mutex> ul(_loaderMutex);
                 _loadingCond.wait(ul, [&] { return !_loading; });
                 return loading_result();
             }
 
             bool loading_result() const
             {
-                return _loadingResult.load(std::memory_order_relaxed);
+                return _loadingResult.load(memory_order_relaxed);
             }
 
             void save(string fn, bool saveAll)
@@ -605,14 +642,19 @@ namespace Experience
     //         'filename' can contain spaces and can be a full path. If filename contains spaces, it is best to enclose it in quotations
     void defrag(int argc, char* argv[])
     {
-        if (argc != 3)
+        //Make sure experience has finished loading
+        //Not exactly needed here, but the messages shown when exp loading finish will
+        //disturb the progress messages shown by this function
+        wait_for_loading_finished();
+
+        if (argc != 1)
         {
             sync_cout << "info string Error : Incorrect defrag command" << sync_endl;
             sync_cout << "info string Syntax: defrag [filename]" << sync_endl;
             return;
         }
 
-        string filename = Utility::map_path(Utility::unquote(argv[2]));
+        string filename = Utility::map_path(Utility::unquote(argv[0]));
 
         //Print message
         sync_cout << "\nDefragmenting experience file: " << filename << sync_endl;
@@ -637,8 +679,13 @@ namespace Experience
     //         'filename' can contain spaces but in that case it needs to eb quoted. It can also be a full path
     void merge(int argc, char* argv[])
     {
+        //Make sure experience has finished loading
+        //Not exactly needed here, but the messages shown when exp loading finish will
+        //disturb the progress messages shown by this function
+        wait_for_loading_finished();
+
         //Step 1: Check
-        if (argc < 4)
+        if (argc < 2)
         {
             sync_cout << "info string Error : Incorrect merge command" << sync_endl;
             sync_cout << "info string Syntax: merge <filename> <filename1> [filename2] ... [filenameX]" << sync_endl;
@@ -649,7 +696,7 @@ namespace Experience
 
         //Step 2: Collect filenames
         vector<string> filenames;
-        for (int i = 2; i < argc; ++i)
+        for (int i = 0; i < argc; ++i)
             filenames.push_back(Utility::map_path(Utility::unquote(argv[i])));
 
         //Step 3: The first filename is also the target filename
@@ -668,6 +715,571 @@ namespace Experience
             exp.load(fn, true);
 
         exp.save(targetFilename, true);
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    //Convert compact PGN data to experience entries
+    //
+    //Compact PGN consists of the following format:
+    // {fen-string,w|b|d,move[:score:depth],move[:score:depth],move:score:depth[:score:depth],...}
+    //
+    // *) fen-string: Represents the start position of the game, which is not necesserly the normal start position
+    // *) w|b|d: Indicates the game result from PGN (to be validated), w= white win, b = black win, d = draw
+    // *) move[:score:depth]
+    //      - move : The move in long algebraic form, example e2e4
+    //      - score: The engine evaluation of the position from side to move point of view. This is an optional field
+    //      - depth: The depth of the move as read from engine evaluation. This is an optional field
+    ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    void convert_compact_pgn(int argc, char* argv[])
+    {
+        //Make sure experience has finished loading
+        //Not exactly needed here, but the messages shown when exp loading finish will
+        //disturb the progress messages shown by this function
+        wait_for_loading_finished();
+
+        if (argc < 2)
+        {
+            sync_cout << "Expecting at least 2 arguments, received: " << argc << sync_endl;
+            return;
+        }
+
+        //////////////////////////////////////////////////////////////////////////
+        // Collect input
+        string inputPath  = Utility::unquote(argv[0]);
+        string outputPath = Utility::unquote(argv[1]);
+        int maxPly     = argc >= 3 ? atoi(argv[2])        : 1000;
+        Value maxValue = argc >= 4 ? (Value)atoi(argv[3]) : (Value)VALUE_MATE;
+        Depth minDepth = argc >= 5 ? std::max((Depth)atoi(argv[4]), MIN_EXP_DEPTH) : MIN_EXP_DEPTH;
+        Depth maxDepth = argc >= 6 ? std::max((Depth)atoi(argv[5]), MIN_EXP_DEPTH) : (Depth)MAX_PLY;
+
+        sync_cout                                         << endl
+                  << "Building experience from PGN: "     << endl
+                  << "\tCompact PGN file: " << inputPath  << endl
+                  << "\tExperience file : " << outputPath << endl
+                  << "\tMax ply         : " << maxPly     << endl
+                  << "\tMax value       : " << maxValue   << endl
+                  << "\tDepth range     : " << minDepth   << " - " << maxDepth
+                                                          << endl << sync_endl;
+
+        //////////////////////////////////////////////////////////////////
+        //Conversion information
+        struct GLOBAL_COMPACT_PGN_CONVERSION_DATA
+        {
+            //Game statistics
+            size_t numGames = 0;
+            size_t numGamesWithErrors = 0;
+            size_t numGamesIgnored = 0;
+
+            //Move statistics
+            size_t numMovesWithScores = 0;
+            size_t numMovesWithScoresIgnored = 0;
+            size_t numMovesWithoutScores = 0;                        
+
+            //WBD statistics
+            size_t wbd[COLOR_NB + 1] = { 0, 0, 0 };
+
+            //Input stream
+            fstream inputStream;
+            size_t inputStreamSize = 0;
+
+            //Output stream
+            fstream outputStream;
+            size_t outputStreamBase;
+
+            //Buffer
+            vector<char> buffer;
+        }globalConversionData;
+
+        //////////////////////////////////////////////////////////////////
+        //Game conversion information
+        struct COMPACT_PGN_CONVERSION_DATA
+        {
+            Color detectedWinnerColor;
+            bool drawDetected;
+            int resultWeight[COLOR_NB + 1];
+
+            Position pos;
+
+            COMPACT_PGN_CONVERSION_DATA()
+            {
+                clear();
+            }
+
+            void clear()
+            {
+                detectedWinnerColor = COLOR_NB;
+                drawDetected = false;
+                memset((void*)&resultWeight, 0, sizeof(resultWeight));
+            }
+        }gameData;
+
+        //////////////////////////////////////////////////////////////////////////
+        //Input stream
+        globalConversionData.inputStream.open(inputPath, ios::in | ios::ate);
+        if (!globalConversionData.inputStream.is_open())
+        {
+            sync_cout << "Could not open <" << inputPath << "> for reading" << sync_endl;
+            return;
+        }
+
+        globalConversionData.inputStreamSize = globalConversionData.inputStream.tellg();
+        globalConversionData.inputStream.seekg(0, ios::beg);
+
+        //////////////////////////////////////////////////////////////////////////
+        //Output stream
+        globalConversionData.outputStream.open(outputPath, ios::out | ios::binary | ios::app | ios::ate);
+        if (!globalConversionData.outputStream.is_open())
+        {
+            sync_cout << "Could not open <" << outputPath << "> for writing" << sync_endl;
+            return;
+        }
+
+        globalConversionData.outputStreamBase = globalConversionData.outputStream.tellp();
+
+        //If the output file is a new file, then we need to write the signature
+        if (globalConversionData.outputStreamBase == 0)
+        {
+            globalConversionData.outputStream.write(ExperienceSignature, ExperienceSignatureLength);
+            globalConversionData.outputStreamBase = globalConversionData.outputStream.tellp();
+        }
+
+        //////////////////////////////////////////////////////////////////////////
+        //Buffer
+        globalConversionData.buffer.reserve(WriteBufferSize);
+
+        //////////////////////////////////////////////////////////////////
+        //Experience Data writing routine
+        auto write_data = [&](bool force)
+        {
+            if (force || globalConversionData.buffer.size() >= WriteBufferSize)
+            {
+                globalConversionData.outputStream.write(globalConversionData.buffer.data(), globalConversionData.buffer.size());
+                globalConversionData.buffer.clear();
+
+                size_t numMoves = globalConversionData.numMovesWithScores + globalConversionData.numMovesWithScoresIgnored + globalConversionData.numMovesWithoutScores;
+                size_t inputStreamPos = globalConversionData.inputStream.tellg();
+
+                //Fix for end-of-input stream value of -1!
+                if (inputStreamPos == (size_t)-1)
+                    inputStreamPos = globalConversionData.inputStreamSize;
+
+                sync_cout
+                    << fixed << setprecision(2) << setw(6) << setfill(' ') << ((double)inputStreamPos * 100.0 / (double)globalConversionData.inputStreamSize) << "% ->"
+                    << " Games: " << globalConversionData.numGames << " (errors: " << globalConversionData.numGamesWithErrors << "),"
+                    << " WBD: " << globalConversionData.wbd[WHITE] << "/" << globalConversionData.wbd[BLACK] << "/" << globalConversionData.wbd[COLOR_NB] << ","
+                    << " Moves: " << numMoves << " (" << globalConversionData.numMovesWithScores << " with scores, " << globalConversionData.numMovesWithoutScores << " without scores, " << globalConversionData.numMovesWithScoresIgnored << " ignored)."
+                    << " Exp size: " << format_bytes((size_t)globalConversionData.outputStream.tellp() - globalConversionData.outputStreamBase, 2)
+                    << sync_endl;
+            }
+        };
+
+        //////////////////////////////////////////////////////////////////
+        //Helper function for splitting strings
+        auto tokenize = [](const string& str, char delimiter) -> vector<string>
+        {
+            istringstream iss(str);
+            vector<string> fields;
+
+            string field;
+            while (getline(iss, field, delimiter))
+                fields.push_back(field);
+
+            return fields;
+        };
+
+        //////////////////////////////////////////////////////////////////
+        //Conversion routine
+        auto convert_compact_pgn_to_exp = [&](const string &compactPgn) -> bool
+        {
+            constexpr Value GOOD_SCORE = PawnValueEg * 3;
+            constexpr Value OK_SCORE = GOOD_SCORE / 2;
+            constexpr Value MAX_DRAW_SCORE = (Value)50;
+            constexpr int MIN_WEIGHT_FOR_DRAW = 8;
+            constexpr int MIN_WEIGHT_FOR_WIN = 16;
+            constexpr int MIN_PLY_PER_GAME = 16;
+
+            //Clear current game data
+            gameData.clear();
+
+            //Increment games counter
+            ++globalConversionData.numGames;
+
+            //Split compact PGN into its main three parts
+            vector<string> tokens = tokenize(compactPgn, ',');
+
+            if (tokens.size() < 3)
+            {
+                ++globalConversionData.numGamesWithErrors;
+                return false;
+            }
+
+            //////////////////////////////////////////////////////////////////
+            //Read FEN string
+            string fen = tokens[0];
+
+            //Setup Position
+            StateListPtr states(new deque<StateInfo>(1));
+            gameData.pos.set(fen, false, &states->back(), Threads.main());
+
+            //////////////////////////////////////////////////////////////////
+            //Read result
+            string resultStr = tokens[1];
+
+            //Find winner color from result-string
+            Color winnerColor;
+                 if (resultStr == "w") winnerColor = WHITE;
+            else if (resultStr == "b") winnerColor = BLACK;
+            else if (resultStr == "d") winnerColor = COLOR_NB;
+            else                       return false;
+
+            //////////////////////////////////////////////////////////////////
+            // Read moves
+            int gamePly = 0;
+            ExpEntry tempExp((Key)0, MOVE_NONE, VALUE_NONE, DEPTH_NONE);
+            vector<char> tempBuffer;
+            for (size_t i = 2; i < tokens.size(); ++i)
+            {
+                ++gamePly;
+
+                //Get move and score
+                string _move;
+                string _score;
+                string _depth;
+
+                vector<string> tok = tokenize(tokens[i], ':');
+                if (tok.size() >= 1) _move = tok[0];
+                if (tok.size() >= 2) _score = tok[1];
+                if (tok.size() >= 3) _depth = tok[2];
+
+                if (tok.size() >= 4)
+                {
+                    ++globalConversionData.numGamesWithErrors;
+                    return false;
+                }
+
+                //Cleanup move
+                while (_move.back() == '+' || _move.back() == '#' || _move.back() == '\r' || _move.back() == '\n')
+                    _move.pop_back();
+
+                //Check if move is empty
+                if (_move.empty())
+                {
+                    ++globalConversionData.numGamesWithErrors;
+                    return false;
+                }
+
+                //Parse the move
+                Move move = UCI::to_move(gameData.pos, _move);
+                if (move == MOVE_NONE)
+                {
+                    ++globalConversionData.numGamesWithErrors;
+                    return false;
+                }
+
+                Depth depth = _depth.empty() ? DEPTH_NONE : (Depth)stoi(_depth);
+                Value score = _score.empty() ? VALUE_NONE : (Value)stoi(_score);
+
+                if (depth != DEPTH_NONE && score != VALUE_NONE)
+                {
+                    if (depth >= minDepth && depth <= maxDepth && abs(score) <= maxValue)
+                    {
+                        ++globalConversionData.numMovesWithScores;
+
+                        //Assign to temporary experience
+                        tempExp.key = gameData.pos.key();
+                        tempExp.move = move;
+                        tempExp.value = score;
+                        tempExp.depth = depth;
+
+                        //Add to global buffer
+                        const char* data = reinterpret_cast<const char*>(&tempExp);
+                        tempBuffer.insert(tempBuffer.end(), data, data + sizeof(tempExp));
+                    }
+                    else
+                    {
+                        ++globalConversionData.numMovesWithScoresIgnored;
+                    }
+
+                    //////////////////////////////////////////////////////////////////
+                    //Guess game result and apply sanity checks (we can't trust PGN scores blindly)
+                    if (abs(score) >= VALUE_KNOWN_WIN)
+                    {
+                        Color winnerColorBasedOnThisMove = score > 0 ? gameData.pos.side_to_move() : ~gameData.pos.side_to_move();
+                        if (gameData.detectedWinnerColor == COLOR_NB)
+                        {
+                            gameData.detectedWinnerColor = winnerColorBasedOnThisMove;
+                            if (gameData.detectedWinnerColor != winnerColor)
+                            {
+                                ++globalConversionData.numGamesIgnored;
+                                return false;
+                            }
+                        }
+                        else if (gameData.detectedWinnerColor != winnerColorBasedOnThisMove)
+                        {
+                            ++globalConversionData.numGamesIgnored;
+                            return false;
+                        }
+                    }
+                    else if (gameData.pos.is_draw(gameData.pos.is_draw(gameData.pos.game_ply())))
+                    {
+                        gameData.drawDetected = true;
+                    }
+
+                    //Detect score pattern
+                    if (abs(score) >= GOOD_SCORE)
+                    {
+                        gameData.resultWeight[COLOR_NB] = 0;
+                        gameData.resultWeight[score > 0 ? gameData.pos.side_to_move() : ~gameData.pos.side_to_move()] += score < 0 ? 4 : 2;
+                        gameData.resultWeight[score > 0 ? ~gameData.pos.side_to_move() : gameData.pos.side_to_move()] = 0;
+                    }
+                    else if (abs(score) >= OK_SCORE)
+                    {
+                        gameData.resultWeight[COLOR_NB] /= 2;
+                        gameData.resultWeight[score > 0 ? gameData.pos.side_to_move() : ~gameData.pos.side_to_move()] += score < 0 ? 2 : 1;
+                        gameData.resultWeight[score > 0 ? ~gameData.pos.side_to_move() : gameData.pos.side_to_move()] /= 2;
+                    }
+                    else if (abs(score) <= MAX_DRAW_SCORE)
+                    {
+                        gameData.resultWeight[COLOR_NB] += 2;
+                        gameData.resultWeight[WHITE] = 0;
+                        gameData.resultWeight[BLACK] = 0;
+                    }
+                    else
+                    {
+                        gameData.resultWeight[COLOR_NB] += 1;
+                        gameData.resultWeight[WHITE] /= 2;
+                        gameData.resultWeight[BLACK] /= 2;
+                    }
+                }
+                else
+                {
+                    ++globalConversionData.numMovesWithoutScores;
+                }
+
+                //Do the move
+                states->emplace_back();
+                gameData.pos.do_move(move, states->back());
+
+                //////////////////////////////////////////////////////////////////
+                //Detect draw by insufficient material
+                if (!gameData.drawDetected)
+                {
+                    int num_pieces = gameData.pos.count<ALL_PIECES>();
+
+                    if (num_pieces == 2) //KvK
+                    {
+                        gameData.drawDetected = true;
+                    }
+                    else if (num_pieces == 3 && (gameData.pos.count<BISHOP>() + gameData.pos.count<KNIGHT>()) == 1) //KvK + 1 minor piece
+                    {
+                        gameData.drawDetected = true;
+                    }
+                    else if (num_pieces == 4 && gameData.pos.count<BISHOP>(WHITE) == 1 && gameData.pos.count<BISHOP>(BLACK) == 1) //KBvKB, bishops of the same color
+                    {
+                        if (
+                            ((gameData.pos.pieces(WHITE, BISHOP) & DarkSquares) && (gameData.pos.pieces(BLACK, BISHOP) & DarkSquares))
+                            || ((gameData.pos.pieces(WHITE, BISHOP) & ~DarkSquares) && (gameData.pos.pieces(BLACK, BISHOP) & ~DarkSquares)))
+                            gameData.drawDetected = true;
+                    }
+                }
+
+                //If draw is detected but game result isn't draw then reject the game
+                if (gameData.drawDetected && gameData.detectedWinnerColor != COLOR_NB)
+                {
+                    ++globalConversionData.numGamesIgnored;
+                    return false;
+                }
+            }
+
+            //Does the game have enough moves?
+            if (gamePly < MIN_PLY_PER_GAME)
+            {
+                ++globalConversionData.numGamesIgnored;
+                return false;
+            }
+
+            //If winner isn't yet identified, check result weights and try to identify it
+            if (gameData.detectedWinnerColor == COLOR_NB)
+            {
+                if (gameData.resultWeight[WHITE] >= MIN_WEIGHT_FOR_WIN)
+                    gameData.detectedWinnerColor = WHITE;
+                else if (gameData.resultWeight[BLACK] >= MIN_WEIGHT_FOR_WIN)
+                    gameData.detectedWinnerColor = BLACK;
+            }
+
+            //////////////////////////////////////////////////////////////////
+            //More sanity checks
+            if (   (gameData.detectedWinnerColor != winnerColor)
+                || (winnerColor != COLOR_NB && gameData.resultWeight[winnerColor] < MIN_WEIGHT_FOR_WIN)
+                || (winnerColor == COLOR_NB && !gameData.drawDetected && gameData.resultWeight[COLOR_NB] < MIN_WEIGHT_FOR_DRAW))
+            {
+                ++globalConversionData.numGamesIgnored;
+                return false;
+            }
+
+            //Update WBD stats
+            ++globalConversionData.wbd[winnerColor];
+
+            //Copy to global buffer
+            globalConversionData.buffer.insert(globalConversionData.buffer.end(), tempBuffer.begin(), tempBuffer.end());
+
+            return true;
+        };
+
+        //////////////////////////////////////////////////////////////////
+        //Loop
+        string line;
+        while (getline(globalConversionData.inputStream, line))
+        {
+            //Skip empty lines
+            if (line.empty())
+                continue;
+
+            if (line.front() != '{' || line.back() != '}')
+                continue;
+
+            line = line.substr(1, line.size() - 2);
+
+            if (convert_compact_pgn_to_exp(line))
+                write_data(false);
+        }
+
+        //Final commit
+        write_data(true);
+
+        //////////////////////////////////////////////////////////////////
+        //Defragment outouf file
+        if (globalConversionData.numMovesWithScores)
+        {
+            //If we don't close the output stream here then defragmentation will not be able to create a backup of the file!
+            globalConversionData.outputStream.close();
+
+            sync_cout << "Conversion complete" << endl << endl << "Defragmenting: " << outputPath << sync_endl;
+
+            ExperienceData exp;
+            if (!exp.load(outputPath, true))
+                return;
+
+            //Save
+            exp.save(outputPath, true);
+        }
+    }
+
+    void show_exp(Position& pos, bool extended)
+    {
+        //Make sure experience has finished loading
+        wait_for_loading_finished();
+
+        sync_cout << pos << endl;
+
+        cout << "Experience: ";
+        const ExpEntryEx* expEx = Experience::probe(pos.key());
+        if (!expEx)
+        {
+            cout << "No experience data found for this position" << sync_endl;
+            return;
+        }
+
+        const int experienceBookMovesAhead = 8;
+
+        //Find expected score for all experience moves by playing the next 'experienceBookMovesAhead' moves
+        Color sideToMove = pos.side_to_move();
+        vector<pair<const ExpEntryEx*, Value>> estimatedValue;
+        const ExpEntryEx* tempExpEx = expEx;        
+        while (tempExpEx)
+        {
+            //Start fresh
+            StateInfo st[experienceBookMovesAhead];
+            vector<const ExpEntryEx*> exp; //For undoing of exp moves
+
+            //Find the estimated value of the next 'experienceBookMovesAhead' moves
+            int multiplier = 1;
+            int64_t valueSum = 0;
+            int64_t valueWeight = 0;
+            const Experience::ExpEntryEx* nextPosExpEx = tempExpEx;
+            while (nextPosExpEx && nextPosExpEx->depth >= MIN_EXP_DEPTH && exp.size() < experienceBookMovesAhead)
+            {
+                //Add this exp
+                valueSum += nextPosExpEx->value * nextPosExpEx->depth * multiplier * (pos.side_to_move() == sideToMove ? 1 : -1);
+
+                //Adjust 'multiplierSum' and increase the multiplier
+                valueWeight += nextPosExpEx->depth * multiplier;
+                multiplier++;
+
+                //Do the exp move and probe the next one
+                exp.push_back(nextPosExpEx);
+                pos.do_move(nextPosExpEx->move, st[exp.size() - 1]);
+
+                nextPosExpEx = Experience::probe(pos.key());
+
+                //Find best next experience move (shallow search)
+                const Experience::ExpEntryEx* t = nextPosExpEx ? nextPosExpEx->next : nullptr;
+                while (t)
+                {
+                    if (t->compare(nextPosExpEx))
+                        nextPosExpEx = t;
+
+                    t = t->next;
+                }
+            }
+
+            if (exp.size())
+            {
+                //Undo the moves
+                for (auto it = exp.rbegin(); it != exp.rend(); ++it)
+                    pos.undo_move((*it)->move);
+
+                //Calculate estimated sum
+                estimatedValue.emplace_back(tempExpEx, Value(valueSum / valueWeight));
+            }
+            else
+            {
+                estimatedValue.emplace_back(tempExpEx, VALUE_NONE);
+            }
+
+            //Next
+            tempExpEx = tempExpEx->next;
+        }
+
+        //Sort experience moves based on estimatedValue
+        stable_sort(
+            estimatedValue.begin(),
+            estimatedValue.end(),
+            [](const pair<const ExpEntryEx*, Value> &a, const pair<const ExpEntryEx*, Value> &b)
+            {
+                if (a.second != VALUE_NONE && b.second != VALUE_NONE)
+                    return a.second > b.second;
+
+                if (a.second == VALUE_NONE)
+                    return false;
+
+                return true;
+            });
+
+        cout << endl;
+        int expCount = 0;
+        for(const pair<const ExpEntryEx*, Value>& pr : estimatedValue)
+        {
+            cout
+                << setw(2) << setfill(' ') << left << ++expCount << ": "
+                << setw(5) << setfill(' ') << left << UCI::move(pr.first->move, pos.is_chess960())
+                << ", depth: " << setw(2) << setfill(' ') << left << pr.first->depth
+                << ", eval: " << setw(6) << setfill(' ') << left << UCI::value(pr.first->value, pr.first->value);
+
+            if (extended)
+            {
+                if(pr.second != VALUE_NONE)
+                    cout << ", quality: " << setw(6) << setfill(' ') << left << pr.second;
+                else
+                    cout << ", quality: " << setw(6) << setfill(' ') << left << "N/A";
+            }
+
+            cout << endl;
+
+            expEx = expEx->next;
+        }
+
+        cout << sync_endl;
     }
 
     void pause_learning()

@@ -37,6 +37,8 @@ using std::string;
 #include "tt.h"
 #include "uci.h"
 
+namespace Stockfish {
+
 //https://stackoverflow.com/questions/236129/most-elegant-way-to-split-a-string
 template<typename Out>
 void split(const std::string &s, char delim, Out result) {
@@ -331,7 +333,7 @@ Move san_to_move(Position& pos, std::string& str)
 	int piececount = popcount(bb);
 	while (bb)
 	{
-		Square s = pop_lsb(&bb);
+		Square s = pop_lsb(bb);
 
 		if (piececount > 1 && (disambig_r >= 0 || disambig_f >= 0))
 		{
@@ -479,3 +481,5 @@ int TranspositionTable::hashfull() const {
 
   return cnt / ClusterSize;
 }
+
+} // namespace Stockfish

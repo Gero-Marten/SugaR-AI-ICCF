@@ -41,18 +41,18 @@ public:
     void set_best_book_move(bool best_book_move);
     void set_book_depth(int book_depth);
 
-    Move probe(Position& pos);
+    Stockfish::Move probe(Stockfish::Position& pos);
 
 private:
 
-    Key polyglot_key(const Position& pos);
-    Move pg_move_to_sf_move(const Position & pos, unsigned short pg_move);
+    Stockfish::Key polyglot_key(const Stockfish::Position& pos);
+    Stockfish::Move pg_move_to_sf_move(const Stockfish::Position & pos, unsigned short pg_move);
 
     int find_first_key(uint64_t key);
     int get_key_data();
 
-    bool check_do_search(const Position & pos);
-    bool check_draw(Move m, Position& pos);
+    bool check_do_search(const Stockfish::Position & pos);
+    bool check_draw(Stockfish::Move m, Stockfish::Position& pos);
 
     void byteswap_polyhash(PolyHash *ph);
     uint64_t rand64();
@@ -77,8 +77,8 @@ private:
 
     uint64_t sr;
 
-    Bitboard last_position;
-    Bitboard akt_position;
+    Stockfish::Bitboard last_position;
+    Stockfish::Bitboard akt_position;
     int last_anz_pieces;
     int akt_anz_pieces;
     int search_counter;

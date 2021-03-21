@@ -24,7 +24,7 @@
 #include "types.h"
 #include "position.h"
 
-class Position;
+namespace Stockfish {
 
 enum GenType {
   CAPTURES,
@@ -80,5 +80,7 @@ struct MoveList {
 private:
   ExtMove moveList[MAX_MOVES], *last;
 };
+
+} // namespace Stockfish
 
 #endif // #ifndef MOVEGEN_H_INCLUDED

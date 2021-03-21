@@ -27,7 +27,7 @@
 
 #include <cstring> // std::memset()
 
-namespace Eval::NNUE {
+namespace Stockfish::Eval::NNUE {
 
   // If vector instructions are enabled, we update and refresh the
   // accumulator tile by tile such that each tile fits in the CPU's
@@ -247,7 +247,7 @@ namespace Eval::NNUE {
       // Look for a usable accumulator of an earlier position. We keep track
       // of the estimated gain in terms of features to be added/subtracted.
       StateInfo *st = pos.state(), *next = nullptr;
-      int gain = popcount(pos.pieces()) - 2;
+      int gain = pos.count<ALL_PIECES>() - 2;
       while (st->accumulator.state[c] == EMPTY)
       {
         auto& dp = st->dirtyPiece;
@@ -412,6 +412,6 @@ namespace Eval::NNUE {
         WeightType weights_[kHalfDimensions * kInputDimensions];
   };
 
-}  // namespace Eval::NNUE
+}  // namespace Stockfish::Eval::NNUE
 
 #endif // #ifndef NNUE_FEATURE_TRANSFORMER_H_INCLUDED

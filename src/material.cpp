@@ -24,6 +24,8 @@
 
 using namespace std;
 
+namespace Stockfish {
+
 namespace {
   #define S(mg, eg) make_score(mg, eg)
 
@@ -63,7 +65,6 @@ namespace {
   Endgame<KQKRPs> ScaleKQKRPs[] = { Endgame<KQKRPs>(WHITE), Endgame<KQKRPs>(BLACK) };
   Endgame<KPsK>   ScaleKPsK[]   = { Endgame<KPsK>(WHITE),   Endgame<KPsK>(BLACK) };
   Endgame<KPKP>   ScaleKPKP[]   = { Endgame<KPKP>(WHITE),   Endgame<KPKP>(BLACK) };
-
 
   // Helper used to detect a given material distribution
   bool is_KXK(const Position& pos, Color us) {
@@ -224,3 +225,5 @@ Entry* probe(const Position& pos) {
 }
 
 } // namespace Material
+
+} // namespace Stockfish

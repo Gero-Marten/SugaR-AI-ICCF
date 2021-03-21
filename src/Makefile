@@ -1,4 +1,4 @@
-# SugaR, a UCI chess playing engine derived from Stockfish
+# SugaR, a UCI chess playing engine derived from Glaurung 2.1
 # Copyright (C) 2004-2021 The Stockfish developers (see AUTHORS file)
 #
 # SugaR is free software: you can redistribute it and/or modify

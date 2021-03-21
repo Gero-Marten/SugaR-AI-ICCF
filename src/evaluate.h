@@ -23,6 +23,8 @@
 
 #include "types.h"
 
+namespace Stockfish {
+
 class Position;
 
 namespace Eval {
@@ -37,7 +39,7 @@ namespace Eval {
   // for the build process (profile-build and fishtest) to work. Do not change the
   // name of the macro, as it is used in the Makefile.
   #define EvalFileDefaultName   "nn-62ef826d1a6d.nnue"
-  
+
   namespace NNUE {
 
     Value evaluate(const Position& pos);
@@ -48,5 +50,7 @@ namespace Eval {
   } // namespace NNUE
 
 } // namespace Eval
+
+} // namespace Stockfish
 
 #endif // #ifndef EVALUATE_H_INCLUDED

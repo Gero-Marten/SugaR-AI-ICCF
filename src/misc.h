@@ -28,10 +28,12 @@
 
 #include "types.h"
 
+namespace Stockfish {
+
 class Position;
 
-const std::string engine_info(bool to_uci = false);
-const std::string compiler_info();
+std::string engine_info(bool to_uci = false);
+std::string compiler_info();
 
 void show_logo();
 std::string format_bytes(uint64_t bytes, int decimals);
@@ -50,7 +52,6 @@ namespace SysInfo
 }
 
 void prefetch(void* addr);
-void prefetch2(void* addr);
 void start_logger(const std::string& fname);
 void* std_aligned_alloc(size_t alignment, size_t size);
 void std_aligned_free(void* ptr);
@@ -174,5 +175,7 @@ namespace CommandLine {
   extern std::string binaryDirectory;  // path of the executable directory
   extern std::string workingDirectory; // path of the working directory
 }
+
+} // namespace Stockfish
 
 #endif // #ifndef MISC_H_INCLUDED

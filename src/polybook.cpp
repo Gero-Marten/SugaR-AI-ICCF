@@ -28,6 +28,7 @@ PolyBook polybook;  // global PolyBook
 PolyBook polybook2;  // global second PolyBook
 
 using namespace std;
+using namespace Stockfish;
 
 // Random numbers from PolyGlot, used to compute book hash keys
 const union {
@@ -466,7 +467,7 @@ Key PolyBook::polyglot_key(const Position & pos)
 
     while (b)
     {
-        Square s = pop_lsb(&b);
+        Square s = pop_lsb(b);
         Piece p = pos.piece_on(s);
 
         // PolyGlot pieces are: BP = 0, WP = 1, BN = 2, ... BK = 10, WK = 11

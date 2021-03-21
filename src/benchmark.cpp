@@ -92,6 +92,8 @@ const vector<string> Defaults = {
 
 } // namespace
 
+namespace Stockfish {
+
 /// setup_bench() builds a list of UCI commands to be run by bench. There
 /// are five parameters: TT size in MB, number of search threads that
 /// should be used, the limit value spent for each position, a file name
@@ -99,7 +101,7 @@ const vector<string> Defaults = {
 /// depth, perft, nodes and movetime (in millisecs), and evaluation type
 /// mixed (default), classical, NNUE.
 ///
-/// bench -> search default positions up to depth 11
+/// bench -> search default positions up to depth 13
 /// bench 64 1 15 -> search default positions up to depth 15 (TT = 64MB)
 /// bench 64 4 5000 current movetime -> search current position with 4 threads for 5 sec
 /// bench 64 1 100000 default nodes -> search default positions for 100K nodes each
@@ -113,7 +115,7 @@ vector<string> setup_bench(const Position& current, istream& is) {
   // Assign default values to missing arguments
   string ttSize    = (is >> token) ? token : "16";
   string threads   = (is >> token) ? token : "1";
-  string limit     = (is >> token) ? token : "11";
+  string limit     = (is >> token) ? token : "13";
   string fenFile   = (is >> token) ? token : "default";
   string limitType = (is >> token) ? token : "depth";
   string evalType  = (is >> token) ? token : "mixed";
@@ -168,3 +170,5 @@ vector<string> setup_bench(const Position& current, istream& is) {
 
   return list;
 }
+
+} // namespace Stockfish

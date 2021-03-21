@@ -21,6 +21,8 @@
 #include "movegen.h"
 #include "position.h"
 
+namespace Stockfish {
+
 namespace {
 
   template<GenType Type, Direction D>
@@ -61,7 +63,7 @@ namespace {
     Bitboard pawnsOn7    = pos.pieces(Us, PAWN) &  TRank7BB;
     Bitboard pawnsNotOn7 = pos.pieces(Us, PAWN) & ~TRank7BB;
 
-    Bitboard enemies = (Type == EVASIONS ? pos.pieces(Them) & target:
+    Bitboard enemies = (Type == EVASIONS ? pos.checkers():
                         Type == CAPTURES ? target : pos.pieces(Them));
 
     // Single and double pawn pushes, no promotions
@@ -100,13 +102,13 @@ namespace {
 
         while (b1)
         {
-            Square to = pop_lsb(&b1);
+            Square to = pop_lsb(b1);
             *moveList++ = make_move(to - Up, to);
         }
 
         while (b2)
         {
-            Square to = pop_lsb(&b2);
+            Square to = pop_lsb(b2);
             *moveList++ = make_move(to - Up - Up, to);
         }
     }
@@ -125,13 +127,13 @@ namespace {
         Bitboard b3 = shift<Up     >(pawnsOn7) & emptySquares;
 
         while (b1)
-            moveList = make_promotions<Type, UpRight>(moveList, pop_lsb(&b1), ksq);
+            moveList = make_promotions<Type, UpRight>(moveList, pop_lsb(b1), ksq);
 
         while (b2)
-            moveList = make_promotions<Type, UpLeft >(moveList, pop_lsb(&b2), ksq);
+            moveList = make_promotions<Type, UpLeft >(moveList, pop_lsb(b2), ksq);
 
         while (b3)
-            moveList = make_promotions<Type, Up     >(moveList, pop_lsb(&b3), ksq);
+            moveList = make_promotions<Type, Up     >(moveList, pop_lsb(b3), ksq);
     }
 
     // Standard and en passant captures
@@ -142,13 +144,13 @@ namespace {
 
         while (b1)
         {
-            Square to = pop_lsb(&b1);
+            Square to = pop_lsb(b1);
             *moveList++ = make_move(to - UpRight, to);
         }
 
         while (b2)
         {
-            Square to = pop_lsb(&b2);
+            Square to = pop_lsb(b2);
             *moveList++ = make_move(to - UpLeft, to);
         }
 
@@ -165,7 +167,7 @@ namespace {
             assert(b1);
 
             while (b1)
-                *moveList++ = make<EN_PASSANT>(pop_lsb(&b1), pos.ep_square());
+                *moveList++ = make<EN_PASSANT>(pop_lsb(b1), pos.ep_square());
         }
     }
 
@@ -180,23 +182,18 @@ namespace {
 
     Bitboard bb = piecesToMove & pos.pieces(Pt);
 
-    if (!bb)
-        return moveList;
-
-    [[maybe_unused]] const Bitboard checkSquares = pos.check_squares(Pt);
-
     while (bb) {
-        Square from = pop_lsb(&bb);
+        Square from = pop_lsb(bb);
 
         Bitboard b = attacks_bb<Pt>(from, pos.pieces()) & target;
         if constexpr (Checks)
-            b &= checkSquares;
+            b &= pos.check_squares(Pt);
 
         Square ksq = pos.square<KING>(Us);
 
         while (b)
         {
-            Square to = pop_lsb(&b);
+            Square to = pop_lsb(b);
             if (!(pos.blockers_for_king(Us) & from) || aligned(from, to, ksq))
                 *moveList++ = make_move(from, to);
         }
@@ -227,11 +224,8 @@ namespace {
             target = ~pos.pieces();
             break;
         case EVASIONS:
-        {
-            Square checksq = lsb(pos.checkers());
-            target = between_bb(pos.square<KING>(Us), checksq) | checksq;
+            target = between_bb(pos.square<KING>(Us), lsb(pos.checkers())) | pos.checkers();
             break;
-        }
         case NON_EVASIONS:
             target = ~pos.pieces(Us);
             break;
@@ -249,7 +243,7 @@ namespace {
         Bitboard b = attacks_bb<KING>(ksq) & target;
         while (b)
         {
-           Square to = pop_lsb(&b);
+           Square to = pop_lsb(b);
            if ((pos.attackers_to(to) & pos.pieces(~Us)) == 0)
                *moveList++ = make_move(ksq, to);
         }
@@ -302,7 +296,7 @@ ExtMove* generate<QUIET_CHECKS>(const Position& pos, ExtMove* moveList) {
 
   while (dc)
   {
-     Square from = pop_lsb(&dc);
+     Square from = pop_lsb(dc);
      PieceType pt = type_of(pos.piece_on(from));
 
      Bitboard b = attacks_bb(pt, from, pos.pieces()) & ~pos.pieces();
@@ -311,7 +305,7 @@ ExtMove* generate<QUIET_CHECKS>(const Position& pos, ExtMove* moveList) {
          b &= ~attacks_bb<QUEEN>(pos.square<KING>(~us));
 
      while (b)
-         *moveList++ = make_move(from, pop_lsb(&b));
+         *moveList++ = make_move(from, pop_lsb(b));
   }
 
   return us == WHITE ? generate_all<WHITE, QUIET_CHECKS>(pos, moveList)
@@ -335,13 +329,13 @@ ExtMove* generate<EVASIONS>(const Position& pos, ExtMove* moveList) {
   // the king evasions in order to skip known illegal moves, which avoids any
   // useless legality checks later on.
   while (sliders)
-      sliderAttacks |= line_bb(ksq, pop_lsb(&sliders)) & ~pos.checkers();
+      sliderAttacks |= line_bb(ksq, pop_lsb(sliders)) & ~pos.checkers();
 
   // Generate evasions for king, capture and non capture moves
   Bitboard b = attacks_bb<KING>(ksq) & ~pos.pieces(us) & ~sliderAttacks;
   while (b)
   {
-     Square to = pop_lsb(&b);
+     Square to = pop_lsb(b);
      if ((pos.attackers_to(to) & pos.pieces(~us)) == 0)
          *moveList++ = make_move(ksq, to);
   }
@@ -376,3 +370,5 @@ ExtMove* generate<LEGAL>(const Position& pos, ExtMove* moveList) {
 
   return moveList;
 }
+
+} // namespace Stockfish
