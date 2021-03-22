@@ -251,12 +251,11 @@ void MainThread::search() {
       if (!Limits.infinite && !Limits.mate)
       {
           //Check polyglot books first
-          if ((bool)Options["OwnBook"])
-          {
-              bookMove = polybook.probe(rootPos);
-              if (!bookMove)
-                  bookMove = polybook2.probe(rootPos);
-          }
+          if ((bool)Options["Book1"] && rootPos.game_ply() / 2 < (int)Options["Book1 Depth"])
+              bookMove = polybook[0].probe(rootPos, (bool)Options["Book1 BestBookMove"]);
+
+          if (bookMove == MOVE_NONE && (bool)Options["Book2"] && rootPos.game_ply() / 2 < (int)Options["Book2 Depth"])
+              bookMove = polybook[1].probe(rootPos, (bool)Options["Book1 BestBookMove"]);
 
           //Check experience book second
           if (bookMove == MOVE_NONE && (bool)Options["Experience Book"] && rootPos.game_ply() / 2 < (int)Options["Experience Book Max Moves"] && Experience::enabled())
