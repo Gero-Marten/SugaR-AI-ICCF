@@ -50,10 +50,8 @@ void on_HashFile(const Option& o) { TT.set_hash_file_name(o); }
 void SaveHashtoFile(const Option&) { TT.save(); }
 void LoadHashfromFile(const Option&) { TT.load(); }
 void LoadEpdToHash(const Option&) { TT.load_epd_to_hash(); }
-void on_book_file(const Option& o) { polybook.init(o); }
-void on_book_file2(const Option& o) { polybook2.init(o); }
-void on_best_book_move(const Option& o) { polybook.set_best_book_move(o); }
-void on_book_depth(const Option& o) { polybook.set_book_depth(o); }
+void on_book1_file(const Option& o) { polybook[0].init(o); }
+void on_book2_file(const Option& o) { polybook[1].init(o); }
 void on_exp_enabled(const Option& /*o*/) { Experience::init(); }
 void on_exp_file(const Option& /*o*/) { Experience::init(); }
 void on_use_NNUE(const Option& ) { Eval::NNUE::init(); }
@@ -100,11 +98,14 @@ void init(OptionsMap& o) {
   o["SyzygyProbeDepth"]          << Option(1, 1, 100);
   o["Syzygy50MoveRule"]          << Option(true);
   o["SyzygyProbeLimit"]          << Option(7, 0, 7);
-  o["OwnBook"]                   << Option(false); 
-  o["BookFile"]                  << Option("<empty>", on_book_file);
-  o["BookFile2"]                 << Option("<empty>", on_book_file2);
-  o["BestBookMove"]              << Option(false, on_best_book_move);
-  o["BookDepth"]                 << Option(300, 1, 350, on_book_depth);
+  o["Book1"]                     << Option(false);
+  o["Book1 File"]                << Option("<empty>", on_book1_file);
+  o["Book1 BestBookMove"]        << Option(true);
+  o["Book1 Depth"]               << Option(100, 1, 350);
+  o["Book2"]                     << Option(false);
+  o["Book2 File"]                << Option("<empty>", on_book2_file);
+  o["Book2 BestBookMove"]        << Option(true);
+  o["Book2 Depth"]               << Option(100, 1, 350);
   o["Experience Enabled"]        << Option(true, on_exp_enabled);
   o["Experience File"]           << Option("SugaR.exp", on_exp_file);
   o["Experience Readonly"]       << Option(false);
