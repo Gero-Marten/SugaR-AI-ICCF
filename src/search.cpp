@@ -332,98 +332,101 @@ void MainThread::search() {
                       tempExpEx = tempExpEx->next;
                   }
 
-                  //Delegate to filter out drawing experience moves (the ones that are execluded earlier)
-                  auto should_consider_exp_move = [&estimatedValue](const Experience::ExpEntryEx* ex)
+                  if (estimatedValue.size())
                   {
-                      return estimatedValue.find(ex) != estimatedValue.end();
-                  };
-
-                  //Find best experience move (algorithm is similar to Thread::get_best_thread())
-                  //Step 1: Find minimum score of all exp moves
-                  Value minExpectedScore = VALUE_NONE;
-                  tempExpEx = expEx;
-                  while (tempExpEx)
-                  {
-                      if (should_consider_exp_move(tempExpEx))
+                      //Delegate to filter out drawing experience moves (the ones that are execluded earlier)
+                      auto should_consider_exp_move = [&estimatedValue](const Experience::ExpEntryEx* ex)
                       {
-                          //Ignore this experience move if it is not present in the 'estimatedValue' map (which contains all the moves that enhance the score)
-                          minExpectedScore = std::min(minExpectedScore, estimatedValue[tempExpEx]);
+                          return estimatedValue.find(ex) != estimatedValue.end();
+                      };
+
+                      //Find best experience move (algorithm is similar to Thread::get_best_thread())
+                      //Step 1: Find minimum score of all exp moves
+                      Value minExpectedScore = VALUE_NONE;
+                      tempExpEx = expEx;
+                      while (tempExpEx)
+                      {
+                          if (should_consider_exp_move(tempExpEx))
+                          {
+                              //Ignore this experience move if it is not present in the 'estimatedValue' map (which contains all the moves that enhance the score)
+                              minExpectedScore = std::min(minExpectedScore, estimatedValue[tempExpEx]);
+                          }
+
+                          //Next
+                          tempExpEx = tempExpEx->next;
+                      };
+
+                      //Step 2: Do the voting
+                      map<const Experience::ExpEntryEx*, int64_t> votes;
+                      vector<const Experience::ExpEntryEx*> allExpMoves;
+                      tempExpEx = expEx;
+                      while (tempExpEx)
+                      {
+                          if (should_consider_exp_move(tempExpEx))
+                          {
+                              allExpMoves.push_back(tempExpEx);
+                              votes[tempExpEx] += (estimatedValue[tempExpEx] - minExpectedScore + 14) * int(tempExpEx->depth);
+                          }
+
+                          //Next
+                          tempExpEx = tempExpEx->next;
                       }
 
-                      //Next
-                      tempExpEx = tempExpEx->next;
-                  };
+                      //Remove all experience moves that are not good enough or drawing
+                      allExpMoves.erase(
+                          remove_if(
+                              allExpMoves.begin(),
+                              allExpMoves.end(),
+                              [&estimatedValue](const Experience::ExpEntryEx* ex)
+                              {
+                                  return estimatedValue[ex] + PawnValueEg / 5 < ex->value;
+                              }),
+                          allExpMoves.end());
 
-                  //Step 2: Do the voting
-                  map<const Experience::ExpEntryEx*, int64_t> votes;
-                  vector<const Experience::ExpEntryEx*> allExpMoves;
-                  tempExpEx = expEx;
-                  while (tempExpEx)
-                  {
-                      if (should_consider_exp_move(tempExpEx))
-                      {
-                          allExpMoves.push_back(tempExpEx);
-                          votes[tempExpEx] += (estimatedValue[tempExpEx] - minExpectedScore + 14) * int(tempExpEx->depth);
-                      }
-
-                      //Next
-                      tempExpEx = tempExpEx->next;
-                  }
-
-                  //Remove all experience moves that are not good enough or drawing
-                  allExpMoves.erase(
-                      remove_if(
+                      //Sort remaining experience moves based on votes
+                      stable_sort(
                           allExpMoves.begin(),
                           allExpMoves.end(),
-                          [&estimatedValue](const Experience::ExpEntryEx* ex)
+                          [&votes](const Experience::ExpEntryEx* ex1, const Experience::ExpEntryEx* ex2)
                           {
-                              return estimatedValue[ex] + PawnValueEg / 5 < ex->value;
-                          }),
-                      allExpMoves.end());
+                              return votes[ex1] > votes[ex2];
+                          });
 
-                  //Sort remaining experience moves based on votes
-                  stable_sort(
-                      allExpMoves.begin(),
-                      allExpMoves.end(),
-                      [&votes](const Experience::ExpEntryEx* ex1, const Experience::ExpEntryEx* ex2)
+                      //Provide some info to the GUI
+                      for (auto it = allExpMoves.rbegin(); it != allExpMoves.rend(); ++it)
                       {
-                          return votes[ex1] > votes[ex2];
-                      });
+                          sync_cout
+                              << "info"
+                              << " depth " << (*it)->depth
+                              << " seldepth " << (*it)->depth
+                              << " multipv 1"
+                              << " score " << UCI::value((*it)->value, (*it)->value)
+                              << " nodes 0"
+                              << " nps 0"
+                              << " tbhits 0"
+                              << " time 0"
+                              << " pv " << UCI::move((*it)->move, rootPos.is_chess960())
+                              << sync_endl;
+                      }
 
-                  //Provide some info to the GUI
-                  for (auto it = allExpMoves.rbegin(); it != allExpMoves.rend(); ++it)
-                  {
-                      sync_cout
-                          << "info"
-                          << " depth " << (*it)->depth
-                          << " seldepth " << (*it)->depth
-                          << " multipv 1"
-                          << " score " << UCI::value((*it)->value, (*it)->value)
-                          << " nodes 0"
-                          << " nps 0"
-                          << " tbhits 0"
-                          << " time 0"
-                          << " pv " << UCI::move((*it)->move, rootPos.is_chess960())
-                          << sync_endl;
+                      //Apply 'Best Move'
+                      const Experience::ExpEntryEx* expBookMoveEx = nullptr;
+                      if (!(bool)Options["Experience Book Best Move"] && allExpMoves.size() > 1)
+                      {
+                          static auto randomEngine = std::default_random_engine(now());
+
+                          //Pick one of the top two moves
+                          expBookMoveEx = allExpMoves[randomEngine() % 2];
+                      }
+                      else
+                      {
+                          expBookMoveEx = allExpMoves.front();
+                      }
+
+                      //Assign the book move
+                      if (expBookMoveEx)
+                          bookMove = expBookMoveEx->move;
                   }
-
-                  //Apply 'Best Move'
-                  const Experience::ExpEntryEx* expBookMoveEx = nullptr;
-                  if (!(bool)Options["Experience Book Best Move"] && allExpMoves.size() > 1)
-                  {
-                      static auto randomEngine = std::default_random_engine(now());
-
-                      //Pick one of the top two moves
-                      expBookMoveEx = allExpMoves[randomEngine() % 2];
-                  }
-                  else
-                  {
-                      expBookMoveEx = allExpMoves.front();
-                  }
-
-                  //Assign the book move
-                  if (expBookMoveEx)
-                      bookMove = expBookMoveEx->move;
               }
           }
       }
