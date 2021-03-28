@@ -56,7 +56,6 @@
 
 
 using namespace std;
-using namespace Stockfish::Eval::NNUE;
 
 namespace Stockfish {
 
@@ -265,7 +264,8 @@ namespace {
   constexpr Score UncontestedOutpost  = S(  1, 10);
   constexpr Score BishopOnKingRing    = S( 24,  0);
   constexpr Score BishopXRayPawns     = S(  4,  5);
-  constexpr Score CorneredBishop      = S( 50, 50);
+  constexpr Value CorneredBishopV     = Value(50);
+  constexpr Score CorneredBishop      = S(CorneredBishopV, CorneredBishopV);
   constexpr Score FlankAttacks        = S(  8,  0);
   constexpr Score Hanging             = S( 69, 36);
   constexpr Score KnightOnQueen       = S( 16, 11);
@@ -400,7 +400,8 @@ namespace {
 
     attackedBy[Us][Pt] = 0;
 
-    while (b1) {
+    while (b1)
+    {
         Square s = pop_lsb(b1);
 
         // Find attacked squares, including x-ray attacks for bishops and rooks
@@ -481,9 +482,9 @@ namespace {
                 {
                     Direction d = pawn_push(Us) + (file_of(s) == FILE_A ? EAST : WEST);
                     if (pos.piece_on(s + d) == make_piece(Us, PAWN))
-                        score -= !pos.empty(s + d + pawn_push(Us))                ? CorneredBishop * 4
-                                : pos.piece_on(s + d + d) == make_piece(Us, PAWN) ? CorneredBishop * 2
-                                                                                  : CorneredBishop;
+                        score -= !pos.empty(s + d + pawn_push(Us)) ? CorneredBishop * 4
+                                                                   : CorneredBishop * 3;
+																								   
                 }
             }
         }
@@ -1037,7 +1038,7 @@ make_v:
     return (pos.side_to_move() == WHITE ? v : -v) + Tempo;
   }
 
-} // namespace
+} // namespace Eval
 
 
 /// evaluate() is the evaluator for the outer world. It returns a static

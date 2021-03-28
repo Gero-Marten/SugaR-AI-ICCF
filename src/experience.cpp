@@ -29,6 +29,7 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <unordered_map>
 #include "misc.h"
 #include "uci.h"
 #include "position.h"
@@ -38,11 +39,64 @@
 using namespace std;
 using namespace Stockfish;
 
+#define USE_GOOGLE_SPARSEHASH_DENSEMAP
+#define USE_CUSTOM_HASHER
+
+#ifdef USE_GOOGLE_SPARSEHASH_DENSEMAP
+#include "sparsehash/dense_hash_map"
+#else
+#include <unordered_map>
+#endif
+
+#ifdef USE_GOOGLE_SPARSEHASH_DENSEMAP
+#ifdef USE_CUSTOM_HASHER
+        //Custom Hash functor for "Key" type
+struct KeyHasher
+{
+    //Hash operator
+    inline size_t operator()(const Stockfish::Key& key) const
+    {
+        return key & 0x00000000FFFFFFFFULL;
+    }
+
+    //Compare operator
+    inline bool operator()(const Stockfish::Key& key1, const Stockfish::Key& key2) const
+    {
+        return key1 == key2;
+    }
+};
+
+//template<typename tKey, typename tVal> using SugaRMap = google::dense_hash_map<tKey, tVal, KeyHasher, KeyHasher>;
+template<typename tKey, typename tVal> class SugaRMap : public google::dense_hash_map<tKey, tVal, KeyHasher, KeyHasher>
+{
+public:
+    SugaRMap(tKey emptyKey, tKey deletedKey)
+    {
+        google::dense_hash_map<tKey, tVal, KeyHasher, KeyHasher>::set_empty_key(emptyKey);
+        google::dense_hash_map<tKey, tVal, KeyHasher, KeyHasher>::set_deleted_key(deletedKey);
+    }
+};
+#else
+template<typename tKey, typename tVal> using SugaRMap = google::dense_hash_map<tKey, tVal>;
+#endif
+
+template<typename tVal> class SugaRKeyMap : public SugaRMap<Stockfish::Key, tVal>
+{
+public:
+    SugaRKeyMap() : SugaRMap<Key, tVal>((Key)0, (Key)-1)
+    {
+    }
+};
+#else
+template<typename tKey, typename tVal> using SugaRMap = std::unordered_map<tKey, tVal>;
+template<typename tVal> using SugaRKeyMap = SugaRMap<Key, tVal>;
+#endif
+
 namespace Experience
 {
-    typedef unordered_map<Key, ExpEntryEx*> ExpMap;
-    typedef unordered_map<Key, ExpEntryEx*>::iterator ExpIterator;
-    typedef unordered_map<Key, ExpEntryEx*>::const_iterator ExpConstIterator;
+    typedef SugaRKeyMap<ExpEntryEx*> ExpMap;
+    typedef SugaRKeyMap<ExpEntryEx*>::iterator ExpIterator;
+    typedef SugaRKeyMap<ExpEntryEx*>::const_iterator ExpConstIterator;
 
     namespace
     {
@@ -566,6 +620,140 @@ namespace Experience
         bool learningPaused = false;
     }
 
+    ////////////////////////////////////////////////////////////////
+    // struct ExpEntry
+    ////////////////////////////////////////////////////////////////
+    ExpEntry::ExpEntry(Stockfish::Key k, Stockfish::Move m, Stockfish::Value v, Stockfish::Depth d)
+    {
+        key = k;
+        move = m;
+        value = v;
+        depth = d;
+        padding[0] = padding[2] = 0x00;
+        padding[1] = padding[3] = 0xFF;
+    }
+
+    int ExpEntry::compare(const ExpEntry* exp) const
+    {
+        int v = value * (depth / 5) - exp->value * (exp->depth / 5);
+        if (!v)
+            v = depth - exp->depth;
+
+        return v;
+    }
+
+    void ExpEntry::merge(const ExpEntry* exp)
+    {
+        assert(key == exp->key);
+        assert(move == exp->move);
+
+        if (depth > exp->depth)
+            return;
+
+        if (depth == exp->depth)
+        {
+            value = (value + exp->value) / 2;
+        }
+        else
+        {
+            value = exp->value;
+            depth = exp->depth;
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////
+    // struct ExpEntryEx
+    ////////////////////////////////////////////////////////////////
+    ExpEntryEx* ExpEntryEx::find(Stockfish::Move m)
+    {
+        ExpEntryEx* expEx = this;
+        do
+        {
+            if (expEx->move == m)
+                return expEx;
+
+            expEx = expEx->next;
+        } while (expEx);
+
+        return nullptr;
+    }
+
+    pair<Value, bool> ExpEntryEx::quality(Position &pos) const
+    {
+        const int QualityExperienceMovesAhead = 10;
+
+        Color us = pos.side_to_move();
+        Color them = ~us;
+        bool maybeDraw = false;
+
+        //Calculate quality based on evaluation improvement of next moves
+        vector<Move> moves; //Used for doing/undoing of experience moves
+        StateInfo states[QualityExperienceMovesAhead];
+
+        int multiplier[COLOR_NB]      = { 1, 1 };
+        int64_t valueSum[COLOR_NB]    = { 0, 0 };
+        int64_t valueWeight[COLOR_NB] = { 0, 0 };
+        Value lastValue[COLOR_NB]     = { VALUE_NONE, VALUE_NONE };
+        Color me = us;
+
+        const ExpEntryEx* temp1 = this;
+        do
+        {
+            //To be used later
+            lastValue[me] = temp1->value;
+
+            //Do the move
+            moves.emplace_back(temp1->move);
+            pos.do_move(moves.back(), states[moves.size() - 1]);
+            me = ~me;
+
+            if (!maybeDraw)
+                maybeDraw = pos.is_draw(pos.game_ply());
+
+            //Probe the new position
+            temp1 = probe(pos.key());
+
+            //Find best next experience move (shallow search)
+            const ExpEntryEx* temp2 = temp1 ? temp1->next : nullptr;
+            while (temp2)
+            {
+                if (temp2->compare(temp1) > 0)
+                    temp1 = temp2;
+
+                temp2 = temp2->next;
+            }
+
+            if (!temp1)
+                break;
+
+            //Calculate quality based on difference in evaluation, also update valueWeight and multiplier
+            if (lastValue[me] != VALUE_NONE)
+            {
+                valueSum[me]     += (temp1->value - lastValue[me]) * multiplier[me];
+                valueWeight[me]  += multiplier[me];
+                //++multiplier[me];
+            }
+        }while(moves.size() < QualityExperienceMovesAhead);
+
+        //Undo moves
+        for (auto it = moves.rbegin(); it != moves.rend(); ++it)
+            pos.undo_move(*it);
+        
+        //Calculate move quality
+        Value q = VALUE_NONE;
+        if (moves.size() >= 3)
+        {
+            q = value + Value(valueSum[us] / valueWeight[us]);
+            if (moves.size() >= 4)
+                q -= Value(valueSum[them] / valueWeight[them]);
+        }
+
+        return pair<Value, bool>(q, maybeDraw);
+    }
+
+    ////////////////////////////////////////////////////////////////
+    // Global experience functions
+    ////////////////////////////////////////////////////////////////
     void init()
     {
         experienceEnabled = Options["Experience Enabled"];
@@ -1180,85 +1368,33 @@ namespace Experience
             return;
         }
 
-        const int experienceBookMovesAhead = 8;
+        vector<pair<const ExpEntryEx*, Value>> quality;
 
-        //Find expected score for all experience moves by playing the next 'experienceBookMovesAhead' moves
-        Color sideToMove = pos.side_to_move();
-        vector<pair<const ExpEntryEx*, Value>> estimatedValue;
-        const ExpEntryEx* tempExpEx = expEx;        
-        while (tempExpEx)
+        const ExpEntryEx* temp = expEx;
+        while (temp)
         {
-            //Start fresh
-            StateInfo st[experienceBookMovesAhead];
-            vector<const ExpEntryEx*> exp; //For undoing of exp moves
-
-            //Find the estimated value of the next 'experienceBookMovesAhead' moves
-            int multiplier = 1;
-            int64_t valueSum = 0;
-            int64_t valueWeight = 0;
-            const Experience::ExpEntryEx* nextPosExpEx = tempExpEx;
-            while (nextPosExpEx && nextPosExpEx->depth >= MIN_EXP_DEPTH && exp.size() < experienceBookMovesAhead)
-            {
-                //Add this exp
-                valueSum += nextPosExpEx->value * nextPosExpEx->depth * multiplier * (pos.side_to_move() == sideToMove ? 1 : -1);
-
-                //Adjust 'multiplierSum' and increase the multiplier
-                valueWeight += nextPosExpEx->depth * multiplier;
-                multiplier++;
-
-                //Do the exp move and probe the next one
-                exp.push_back(nextPosExpEx);
-                pos.do_move(nextPosExpEx->move, st[exp.size() - 1]);
-
-                nextPosExpEx = Experience::probe(pos.key());
-
-                //Find best next experience move (shallow search)
-                const Experience::ExpEntryEx* t = nextPosExpEx ? nextPosExpEx->next : nullptr;
-                while (t)
-                {
-                    if (t->compare(nextPosExpEx))
-                        nextPosExpEx = t;
-
-                    t = t->next;
-                }
-            }
-
-            if (exp.size())
-            {
-                //Undo the moves
-                for (auto it = exp.rbegin(); it != exp.rend(); ++it)
-                    pos.undo_move((*it)->move);
-
-                //Calculate estimated sum
-                estimatedValue.emplace_back(tempExpEx, Value(valueSum / valueWeight));
-            }
-            else
-            {
-                estimatedValue.emplace_back(tempExpEx, VALUE_NONE);
-            }
-
-            //Next
-            tempExpEx = tempExpEx->next;
+            quality.emplace_back(temp, temp->quality(pos).first);
+            temp = temp->next;
         }
 
-        //Sort experience moves based on estimatedValue
+        //Sort experience moves based on quality
         stable_sort(
-            estimatedValue.begin(),
-            estimatedValue.end(),
+            quality.begin(),
+            quality.end(),
             [](const pair<const ExpEntryEx*, Value> &a, const pair<const ExpEntryEx*, Value> &b)
             {
-                if (a.second != VALUE_NONE && b.second != VALUE_NONE)
-                    return a.second > b.second;
-
                 if (a.second == VALUE_NONE)
                     return false;
 
-                return true;
+                if (b.second == VALUE_NONE)
+                    return true;
+
+                return a.second > b.second;
             });
 
         cout << endl;
         int expCount = 0;
-        for(const pair<const ExpEntryEx*, Value>& pr : estimatedValue)
+        for(const pair<const ExpEntryEx*, Value>& pr : quality)
         {
             cout
                 << setw(2) << setfill(' ') << left << ++expCount << ": "

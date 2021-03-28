@@ -19,7 +19,6 @@
 #ifndef __LEARN_H__
 #define __LEARN_H__
 
-#include <unordered_map>
 #include "types.h"
 
 using namespace std;
@@ -40,39 +39,9 @@ namespace Experience
         ExpEntry(const ExpEntry& exp) = delete;
         ExpEntry& operator =(const ExpEntry& exp) = delete;
         
-        inline explicit ExpEntry(Stockfish::Key k, Stockfish::Move m, Stockfish::Value v, Stockfish::Depth d)
-        {
-            key = k;
-            move = m;
-            value = v;
-            depth = d;
-            padding[0] = padding[2] = 0x00;
-            padding[1] = padding[3] = 0xFF;
-        }
-
-        inline int compare(const ExpEntry* exp) const
-        {
-            return (value * depth) - (exp->value * exp->depth);
-        }
-
-        inline void merge(const ExpEntry* exp)
-        {
-            assert(key == exp->key);
-            assert(move == exp->move);
-
-            if (depth > exp->depth)
-                return;
-
-            if (depth == exp->depth)
-            {
-                value = (value + exp->value) / 2;
-            }
-            else
-            {
-                value = exp->value;
-                depth = exp->depth;
-            }
-        }
+        explicit ExpEntry(Stockfish::Key k, Stockfish::Move m, Stockfish::Value v, Stockfish::Depth d);
+        void merge(const ExpEntry* exp);
+        int compare(const ExpEntry* exp) const;
     };
 
     static_assert(sizeof(ExpEntry) == 24);
@@ -86,19 +55,8 @@ namespace Experience
         ExpEntryEx(const ExpEntryEx& expEx) = delete;
         ExpEntryEx &operator =(const ExpEntryEx& expEx) = delete;
 
-        inline ExpEntryEx* find(Stockfish::Move m)
-        {
-            ExpEntryEx* expEx = this;
-            do
-            {
-                if (expEx->move == m)
-                    return expEx;
-
-                expEx = expEx->next;
-            } while (expEx);
-
-            return nullptr;
-        }
+        ExpEntryEx* find(Stockfish::Move m);
+        std::pair<Stockfish::Value, bool> quality(Stockfish::Position &pos) const;
     };
 
     void init();

@@ -264,168 +264,76 @@ void MainThread::search() {
 
               if (expEx)
               {
-                  const int experienceBookMovesAhead = 8;
-
-                  //Find expected score for all experience moves by playing the next 'experienceBookMovesAhead' moves
-                  Color sideToMove = rootPos.side_to_move();
-                  std::map<const Experience::ExpEntryEx*, Value> estimatedValue;
-                  StateInfo st[experienceBookMovesAhead];
-                  const Experience::ExpEntryEx* tempExpEx = expEx;
-                  vector<const Experience::ExpEntryEx*> exp; //For undoing of exp moves
-                  while (tempExpEx)
+                  vector<pair<const Experience::ExpEntryEx*, Value>> quality;
+                  const Experience::ExpEntryEx* temp = expEx;
+                  while (temp)
                   {
-                      //Start fresh
-                      exp.clear();
+                      pair<Value, bool> q = temp->quality(rootPos);
+                      if(q.first != VALUE_NONE && q.first > 0 && !q.second)
+                          quality.emplace_back(temp, q.first);
 
-                      //Find the estimated value of the next 'experienceBookMovesAhead' moves
-                      int multiplier = 1;
-                      int64_t valueSum = 0;
-                      int64_t valueWeight = 0;
-                      bool drawDetected = false;
-                      const Experience::ExpEntryEx* nextPosExpEx = tempExpEx;
-                      while (nextPosExpEx && nextPosExpEx->depth >= MIN_EXP_DEPTH && exp.size() < experienceBookMovesAhead)
-                      {
-                          //Add this exp
-                          valueSum += nextPosExpEx->value * nextPosExpEx->depth * multiplier * (rootPos.side_to_move() == sideToMove ? 1 : -1);
-
-                          //Adjust 'multiplierSum' and increase the multiplier
-                          valueWeight += nextPosExpEx->depth * multiplier;
-                          multiplier++;
-
-                          //Do the exp move and probe the next one
-                          exp.push_back(nextPosExpEx);
-                          rootPos.do_move(nextPosExpEx->move, st[exp.size() - 1]);
-                          if (rootPos.is_draw(rootPos.game_ply()))
-                          {
-                              drawDetected = true;
-                              break;
-                          }
-
-                          nextPosExpEx = Experience::probe(rootPos.key());
-
-                          //Find best next experience move (shallow search)
-                          const Experience::ExpEntryEx* t = nextPosExpEx ? nextPosExpEx->next : nullptr;
-                          while (t)
-                          {
-                              if (t->compare(nextPosExpEx))
-                                  nextPosExpEx = t;
-
-                              t = t->next;
-                          }
-                      }
-
-                      if (exp.size())
-                      {
-                          //Undo the moves
-                          for (auto it = exp.rbegin(); it != exp.rend(); ++it)
-                              rootPos.undo_move((*it)->move);
-
-                          //Don't consider this experience move if a draw is detected
-                          if (!drawDetected)
-                          {
-                              //Calculate estimated sum
-                              estimatedValue[tempExpEx] = Value(valueSum / valueWeight);
-                          }
-                      }
-
-                      //Next
-                      tempExpEx = tempExpEx->next;
+                      temp = temp->next;
                   }
 
-                  if (estimatedValue.size())
+                  //Sort experience moves based on quality
+                  stable_sort(
+                      quality.begin(),
+                      quality.end(),
+                      [](const pair<const Experience::ExpEntryEx*, Value>& a, const pair<const Experience::ExpEntryEx*, Value>& b)
+                      {
+                          //No need to check for Quality = VALUE_NONE since we are avoiding adding them earlier!
+                          /*if (a.second == VALUE_NONE)
+                              return false;
+
+                          if (b.second == VALUE_NONE)
+                              return true;*/
+
+                          return a.second > b.second;
+                      });
+
+                  if (quality.size())
                   {
-                      //Delegate to filter out drawing experience moves (the ones that are execluded earlier)
-                      auto should_consider_exp_move = [&estimatedValue](const Experience::ExpEntryEx* ex)
-                      {
-                          return estimatedValue.find(ex) != estimatedValue.end();
-                      };
-
-                      //Find best experience move (algorithm is similar to Thread::get_best_thread())
-                      //Step 1: Find minimum score of all exp moves
-                      Value minExpectedScore = VALUE_NONE;
-                      tempExpEx = expEx;
-                      while (tempExpEx)
-                      {
-                          if (should_consider_exp_move(tempExpEx))
-                          {
-                              //Ignore this experience move if it is not present in the 'estimatedValue' map (which contains all the moves that enhance the score)
-                              minExpectedScore = std::min(minExpectedScore, estimatedValue[tempExpEx]);
-                          }
-
-                          //Next
-                          tempExpEx = tempExpEx->next;
-                      };
-
-                      //Step 2: Do the voting
-                      map<const Experience::ExpEntryEx*, int64_t> votes;
-                      vector<const Experience::ExpEntryEx*> allExpMoves;
-                      tempExpEx = expEx;
-                      while (tempExpEx)
-                      {
-                          if (should_consider_exp_move(tempExpEx))
-                          {
-                              allExpMoves.push_back(tempExpEx);
-                              votes[tempExpEx] += (estimatedValue[tempExpEx] - minExpectedScore + 14) * int(tempExpEx->depth);
-                          }
-
-                          //Next
-                          tempExpEx = tempExpEx->next;
-                      }
-
-                      //Remove all experience moves that are not good enough or drawing
-                      allExpMoves.erase(
-                          remove_if(
-                              allExpMoves.begin(),
-                              allExpMoves.end(),
-                              [&estimatedValue](const Experience::ExpEntryEx* ex)
-                              {
-                                  return estimatedValue[ex] + PawnValueEg / 5 < ex->value;
-                              }),
-                          allExpMoves.end());
-
-                      //Sort remaining experience moves based on votes
+                      //Sort experience moves based on quality
                       stable_sort(
-                          allExpMoves.begin(),
-                          allExpMoves.end(),
-                          [&votes](const Experience::ExpEntryEx* ex1, const Experience::ExpEntryEx* ex2)
+                          quality.begin(),
+                          quality.end(),
+                          [](const pair<const Experience::ExpEntryEx*, int>& a, const pair<const Experience::ExpEntryEx*, int>& b)
                           {
-                              return votes[ex1] > votes[ex2];
+                              return a.second > b.second;
                           });
 
-                      //Provide some info to the GUI
-                      for (auto it = allExpMoves.rbegin(); it != allExpMoves.rend(); ++it)
+                      //Provide some info to the GUI about available exp moves
+                      int expCount = 0;
+                      for (auto it = quality.rbegin(); it != quality.rend(); ++it)
                       {
+                          expCount++;
+
                           sync_cout
                               << "info"
-                              << " depth " << (*it)->depth
-                              << " seldepth " << (*it)->depth
+                              << " depth "    << it->first->depth
+                              << " seldepth " << it->first->depth
                               << " multipv 1"
-                              << " score " << UCI::value((*it)->value, (*it)->value)
-                              << " nodes 0"
-                              << " nps 0"
+                              << " score "    << UCI::value(it->first->value, it->first->value)
+                              << " nodes "    << expCount
+                              << " nps "      << expCount
                               << " tbhits 0"
                               << " time 0"
-                              << " pv " << UCI::move((*it)->move, rootPos.is_chess960())
+                              << " pv "       << UCI::move(it->first->move, rootPos.is_chess960())
                               << sync_endl;
                       }
 
                       //Apply 'Best Move'
-                      const Experience::ExpEntryEx* expBookMoveEx = nullptr;
-                      if (!(bool)Options["Experience Book Best Move"] && allExpMoves.size() > 1)
+                      if (!(bool)Options["Experience Book Best Move"] && quality.size() > 1)
                       {
-                          static auto randomEngine = std::default_random_engine(now());
+                          static PRNG rng(now());
 
-                          //Pick one of the top two moves
-                          expBookMoveEx = allExpMoves[randomEngine() % 2];
+                          //Pick one move of the top 50%
+                          bookMove = quality[rng.rand<uint32_t>() % std::max<uint32_t>(quality.size() / 2, 2)].first->move;
                       }
                       else
                       {
-                          expBookMoveEx = allExpMoves.front();
+                          bookMove = quality.front().first->move;
                       }
-
-                      //Assign the book move
-                      if (expBookMoveEx)
-                          bookMove = expBookMoveEx->move;
                   }
               }
           }
@@ -828,11 +736,11 @@ namespace {
 
     // Step 1. Initialize node
     Thread* thisThread = pos.this_thread();
-    ss->inCheck = pos.checkers();
-    priorCapture = pos.captured_piece();
-    Color us = pos.side_to_move();
-    moveCount = captureCount = quietCount = ss->moveCount = 0;
-    bestValue = -VALUE_INFINITE;
+    ss->inCheck        = pos.checkers();
+    priorCapture       = pos.captured_piece();
+    Color us           = pos.side_to_move();
+    moveCount          = captureCount = quietCount = ss->moveCount = 0;
+    bestValue          = -VALUE_INFINITE;
     ss->distanceFromPv = (PvNode ? 0 : ss->distanceFromPv);
     gameCycle = kingDanger = false;
     rootDepth = thisThread->rootDepth;
@@ -1205,6 +1113,7 @@ namespace {
            && (!ss->ttHit || ttDepth < depth - 3))
        {
            assert(probCutBeta < VALUE_INFINITE);
+
            MovePicker mp(pos, ttMove, probCutBeta - ss->staticEval, &captureHistory);
            int probCutCount = 0;
            bool ttPv = ss->ttPv;
@@ -1533,14 +1442,16 @@ namespace {
 
           // Decrease reduction if position is or has been on the PV
           // and node is not likely to fail low. (~10 Elo)
-          if (ss->ttPv && !likelyFailLow)
+          if (   ss->ttPv
+              && !likelyFailLow)
               r -= 2;
 
           if (rootDepth > 10 && pos.king_danger())
               r -= 1;
 
           // More reductions for late moves if position was not in previous PV
-          if (moveCountPruning && !formerPv)
+          if (   moveCountPruning
+              && !formerPv)
               r++;
 
           // Decrease reduction if opponent's move count is high (~5 Elo)
@@ -1553,7 +1464,7 @@ namespace {
 
           if (captureOrPromotion)
           {
-              // Unless giving check, this capture is likely bad
+              // Increase reduction for non-checking captures likely to be bad
               if (   !givesCheck
                   && ss->staticEval + PieceValue[EG][pos.captured_piece()] + 210 * depth <= alpha)
                   r++;
@@ -1570,7 +1481,7 @@ namespace {
 
               // Decrease reduction for moves that escape a capture. Filter out
               // castling moves, because they are coded as "king captures rook" and
-              // hence break make_move(). (~2 Elo)
+              // hence break reverse_move() (~2 Elo)
               else if (    type_of(move) == NORMAL
                        && !pos.see_ge(reverse_move(move)))
                   r -= 2 + ss->ttPv - (type_of(movedPiece) == PAWN);
@@ -1737,8 +1648,9 @@ namespace {
     assert(moveCount || !ss->inCheck || excludedMove || !MoveList<LEGAL>(pos).size());
 
     if (!moveCount)
-        bestValue = excludedMove ? alpha
-                   :     ss->inCheck ? mated_in(ss->ply) : VALUE_DRAW;
+        bestValue = excludedMove ? alpha :
+                    ss->inCheck  ? mated_in(ss->ply)
+                                 : VALUE_DRAW;
 
     // If there is a move which produces search value greater than alpha we update stats of searched moves
     else if (bestMove)
