@@ -92,7 +92,7 @@ void init(OptionsMap& o) {
   o["LoadHashfromFile"]                << Option(LoadHashfromFile);
   o["LoadEpdToHash"]                   << Option(LoadEpdToHash);
   o["UCI_AnalyseMode"]                 << Option(false);
-  o["ShowWDL"]                         << Option(false);
+  o["UCI_ShowWDL"]                     << Option(false);
   o["multiPV Search"]                  << Option(0, 0,  8);
   o["SyzygyPath"]                      << Option("<empty>", on_tb_path);
   o["SyzygyProbeDepth"]                << Option(1, 1, 100);
