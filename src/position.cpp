@@ -1323,7 +1323,7 @@ bool Position::legal(Move m) const {
   // If the moving piece is a king, check whether the destination square is
   // attacked by the opponent.
   if (type_of(piece_on(from)) == KING)
-      return !(attackers_to(to, pieces() ^ from) & pieces(~us));
+      return !(attackers_to(to) & pieces(~us));
 
   // A non-king move is legal if and only if it is not pinned or it
   // is moving along the ray towards or away from the king.
@@ -1392,7 +1392,7 @@ bool Position::pseudo_legal(const Move m) const {
           if (more_than_one(checkers()))
               return false;
 
-          // Our move must be a blocking interposition or a capture of the checking piece
+          // Our move must be a blocking evasion or a capture of the checking piece
           if (!(between_bb(square<KING>(us), lsb(checkers())) & to))
               return false;
       }
@@ -1464,7 +1464,6 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
   assert(is_ok(m));
   assert(&newSt != st);
 
-  thisThread->nodes.fetch_add(1, std::memory_order_relaxed);
   Key k = st->key ^ Zobrist::side;
 
   // Copy some fields of the old state to our new StateInfo object except the
@@ -1792,7 +1791,7 @@ void Position::do_null_move(StateInfo& newSt) {
   }
 
   st->key ^= Zobrist::side;
-  prefetch(TT.first_entry(key()));
+  prefetch(TT.first_entry(st->key));
 
   ++st->rule50;
   st->pliesFromNull = 0;
@@ -1943,7 +1942,7 @@ bool Position::see_ge(Move m, Value threshold) const {
 
 bool Position::is_draw(int ply) const {
 
-  if (st->rule50 > 99 && (!checkers() || MoveList<LEGAL>(*this).size()))
+  if (st->rule50 > 99 + bool(checkers()))
       return true;
 
   // Return a draw score if a position repeats once earlier but strictly

@@ -22,6 +22,7 @@
 #include <cstring>   // For std::memset
 #include <iostream>
 #include <sstream>
+#include <random> 
 
 #include "polybook.h"
 #include "evaluate.h"
@@ -263,13 +264,12 @@ void MainThread::search() {
 
               if (expEx)
               {
-                  int evalImportance = (int)Options["Experience Book Eval Importance"];
-                  vector<pair<const Experience::ExpEntryEx*, int>> quality;
+                  vector<pair<const Experience::ExpEntryEx*, Value>> quality;
                   const Experience::ExpEntryEx* temp = expEx;
                   while (temp)
                   {
-                      pair<int, bool> q = temp->quality(rootPos, evalImportance);
-                      if(q.first > 0 && !q.second)
+                      pair<Value, bool> q = temp->quality(rootPos);
+                      if(q.first != VALUE_NONE && q.first > 0 && !q.second)
                           quality.emplace_back(temp, q.first);
 
                       temp = temp->next;
@@ -279,8 +279,15 @@ void MainThread::search() {
                   stable_sort(
                       quality.begin(),
                       quality.end(),
-                      [](const pair<const Experience::ExpEntryEx*, int>& a, const pair<const Experience::ExpEntryEx*, int>& b)
+                      [](const pair<const Experience::ExpEntryEx*, Value>& a, const pair<const Experience::ExpEntryEx*, Value>& b)
                       {
+                          //No need to check for Quality = VALUE_NONE since we are avoiding adding them earlier!
+                          /*if (a.second == VALUE_NONE)
+                              return false;
+
+                          if (b.second == VALUE_NONE)
+                              return true;*/
+
                           return a.second > b.second;
                       });
 
@@ -376,7 +383,7 @@ void MainThread::search() {
       && !Experience::is_learning_paused()
       && !bestThread->rootPos.is_chess960()
       && !(bool)Options["Experience Readonly"]
-	  &&  bestThread->completedDepth >= EXP_MIN_DEPTH)
+	  &&  bestThread->completedDepth >= MIN_EXP_DEPTH)
   {
       //Add best move
       Experience::add_pv_experience(bestThread->rootPos.key(), bestThread->rootMoves[0].pv[0], bestThread->rootMoves[0].score, bestThread->completedDepth);
