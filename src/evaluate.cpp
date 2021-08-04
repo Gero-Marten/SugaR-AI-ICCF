@@ -62,7 +62,7 @@ namespace Stockfish {
 
 namespace Eval {
 
-  uint8_t useNNUE;
+  bool useNNUE;
   string eval_file_loaded = "None";
 
   /// NNUE::init() tries to load a NNUE network at startup time, or when the engine
@@ -75,10 +75,10 @@ namespace Eval {
 
   void NNUE::init() {
 
-     useNNUE = Options["Use NNUE"] == "Hybrid" ? 1
-            : Options["Use NNUE"] == "On" ? 2
-            : 0;
+    useNNUE = Options["Use NNUE"];
 
+    if (!useNNUE)
+        return;
 
     string eval_file = string(Options["EvalFile"]);
 
@@ -1082,11 +1082,6 @@ make_v:
 /// evaluation of the position from the point of view of the side to move.
 
 Value Eval::evaluate(const Position& pos) {
-
-  if (Eval::useNNUE)
-  {
-      if (Eval::useNNUE == 2)
-          return NNUE::evaluate(pos);
 
   Value v = Eval::useNNUE ? NNUE::evaluate(pos, true) + (pos.is_chess960() ? fix_FRC(pos) : 0)
                           : Evaluation<NO_TRACE>(pos).value();

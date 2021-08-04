@@ -33,7 +33,7 @@ namespace Eval {
   std::string trace(Position& pos);
   Value evaluate(const Position& pos);
 
-  extern uint8_t useNNUE;
+  extern bool useNNUE;
   extern std::string eval_file_loaded;
 
   // The default net name MUST follow the format nn-[SHA256 first 12 digits].nnue
