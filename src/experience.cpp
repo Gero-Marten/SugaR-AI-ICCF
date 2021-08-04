@@ -20,16 +20,13 @@
 #include <iostream>
 #include <iomanip>
 #include <string>
-#include <string.h>
-#include <fstream>
 #include <sstream>
+#include <fstream>
 #include <vector>
 #include <stdio.h> //For: remove()
 #include <condition_variable>
 #include <mutex>
 #include <thread>
-#include <atomic>
-#include <unordered_map>
 #include "misc.h"
 #include "uci.h"
 #include "position.h"
@@ -43,66 +40,349 @@ using namespace Stockfish;
 #define USE_CUSTOM_HASHER
 
 #ifdef USE_GOOGLE_SPARSEHASH_DENSEMAP
-#include "sparsehash/dense_hash_map"
-#else
-#include <unordered_map>
-#endif
-
-#ifdef USE_GOOGLE_SPARSEHASH_DENSEMAP
-#ifdef USE_CUSTOM_HASHER
+    #include "sparsehash/dense_hash_map"
+    
+    #ifdef USE_CUSTOM_HASHER
         //Custom Hash functor for "Key" type
-struct KeyHasher
-{
-    //Hash operator
-    inline size_t operator()(const Stockfish::Key& key) const
-    {
-        return key & 0x00000000FFFFFFFFULL;
-    }
+        struct KeyHasher
+        {
+            //Hash operator
+            inline size_t operator()(const Stockfish::Key& key) const
+            {
+                return key & 0x00000000FFFFFFFFULL;
+            }
 
-    //Compare operator
-    inline bool operator()(const Stockfish::Key& key1, const Stockfish::Key& key2) const
-    {
-        return key1 == key2;
-    }
-};
+            //Compare operator
+            inline bool operator()(const Stockfish::Key& key1, const Stockfish::Key& key2) const
+            {
+                return key1 == key2;
+            }
+        };
 
-//template<typename tKey, typename tVal> using SugaRMap = google::dense_hash_map<tKey, tVal, KeyHasher, KeyHasher>;
-template<typename tKey, typename tVal> class SugaRMap : public google::dense_hash_map<tKey, tVal, KeyHasher, KeyHasher>
-{
-public:
-    SugaRMap(tKey emptyKey, tKey deletedKey)
+        template<typename tKey, typename tVal> class SugaRMap : public google::dense_hash_map<tKey, tVal, KeyHasher, KeyHasher>
+        {
+        public:
+            SugaRMap(tKey emptyKey, tKey deletedKey)
+            {
+                google::dense_hash_map<tKey, tVal, KeyHasher, KeyHasher>::set_empty_key(emptyKey);
+                google::dense_hash_map<tKey, tVal, KeyHasher, KeyHasher>::set_deleted_key(deletedKey);
+            }
+        };
+    #else
+        template<typename tKey, typename tVal> class SugaRMap : public google::dense_hash_map<tKey, tVal>
+        {
+        public:
+            SugaRMap(tKey emptyKey, tKey deletedKey)
+            {
+                google::dense_hash_map<tKey, tVal>::set_empty_key(emptyKey);
+                google::dense_hash_map<tKey, tVal>::set_deleted_key(deletedKey);
+            }
+        };
+    #endif
+
+    template<typename tVal> class SugaRKeyMap : public SugaRMap<Stockfish::Key, tVal>
     {
-        google::dense_hash_map<tKey, tVal, KeyHasher, KeyHasher>::set_empty_key(emptyKey);
-        google::dense_hash_map<tKey, tVal, KeyHasher, KeyHasher>::set_deleted_key(deletedKey);
-    }
-};
+    public:
+        SugaRKeyMap() : SugaRMap<Key, tVal>((Key)0, (Key)-1)
+        {
+        }
+    };
 #else
-template<typename tKey, typename tVal> using SugaRMap = google::dense_hash_map<tKey, tVal>;
-#endif
-
-template<typename tVal> class SugaRKeyMap : public SugaRMap<Stockfish::Key, tVal>
-{
-public:
-    SugaRKeyMap() : SugaRMap<Key, tVal>((Key)0, (Key)-1)
-    {
-    }
-};
-#else
-template<typename tKey, typename tVal> using SugaRMap = std::unordered_map<tKey, tVal>;
-template<typename tVal> using SugaRKeyMap = SugaRMap<Key, tVal>;
+    #include <unordered_map>
+    template<typename tKey, typename tVal> using SugaRMap = unordered_map<tKey, tVal>;
+    template<typename tVal> using SugaRKeyMap = SugaRMap<Key, tVal>;
 #endif
 
 namespace Experience
 {
+    class ExperienceReader
+    {
+    protected:
+        bool        match;
+        size_t      entriesCount;
+
+    public:
+        ExperienceReader() : match(false), entriesCount(0) {}
+        virtual ~ExperienceReader() = default;
+
+    protected:
+        bool check_signature_set_count(ifstream& input, size_t inputLength, const string &signature, size_t entrySize)
+        {
+            assert(input && input.is_open() && inputLength);
+
+            //Check if data length contains full experience entries
+            auto check_exp_count = [&]() -> bool
+            {
+                size_t entriesDataLength = inputLength - signature.length();
+                entriesCount = entriesDataLength / entrySize;
+
+                if (entriesCount * entrySize != entriesDataLength)
+                {
+                    entriesCount = 0;
+                    return false;
+                }
+
+                return true;
+            };
+
+            //Check if file signature is matching
+            auto check_signature = [&]() -> bool
+            {
+                if (signature.empty())
+                    return true;
+
+                //If inpout length is less than the signature length then it can't be a match!
+                if (inputLength < signature.length())
+                    return false;
+
+                //Start from the beginning of the file
+                input.seekg(ios::beg);
+
+                //Allocate memory for signature
+                char* sigBuffer = (char*)malloc(signature.length());
+                if (!sigBuffer)
+                {
+                    sync_cout << "info string Failed to allocate " << signature.length() << " bytes for experience signature verification" << sync_endl;
+                    return false;
+                }
+
+                if (!input.read(sigBuffer, signature.length()))
+                {
+                    free(sigBuffer);
+                    sync_cout << "info string Failed to read " << signature.length() << " bytes for experience signature verification" << sync_endl;
+                    return false;
+                }
+
+                bool signatureMatching = memcmp(sigBuffer, signature.c_str(), signature.length()) == 0;
+
+                //Free memory
+                free(sigBuffer);
+
+                return signatureMatching;
+            };
+
+            //Start fresh
+            match = check_exp_count() && check_signature();
+                
+            //Restore file pointer if it is not a match
+            if(!match)
+                input.seekg(ios::beg);
+
+            return match;
+        }
+
+    public:
+        size_t entries_count()
+        {
+            return entriesCount;
+        }
+
+    public:
+        virtual int get_version() = 0;
+        virtual bool check_signature(ifstream& input, size_t inputLength) = 0;
+        virtual bool read(ifstream& input, Current::ExpEntry* exp) = 0;
+    };
+
+    ////////////////////////////////////////////////////////////////
+    // V1
+    ////////////////////////////////////////////////////////////////
+    namespace V1
+    {
+        const char*  ExperienceSignature = "SugaR";
+        const int    ExperienceVersion = 1;
+
+        class ExperienceReader : public Experience::ExperienceReader
+        {
+        private:
+            ExpEntry entry;
+
+        public:
+            explicit ExperienceReader() : entry((Key)0, MOVE_NONE, (Value)0, (Depth)0) {}
+
+        public:
+            virtual int get_version()
+            {
+                return ExperienceVersion;
+            }
+
+            virtual bool check_signature(ifstream& input, size_t inputLength)
+            {
+                return check_signature_set_count(input, inputLength, ExperienceSignature, sizeof(ExpEntry));
+            }
+
+            virtual bool read(ifstream& input, Current::ExpEntry* exp)
+            {
+                assert(match && input.is_open());
+
+                if (!input.read((char*)&entry, sizeof(ExpEntry)))
+                    return false;
+
+                exp->key   = entry.key;
+                exp->move  = (Move)entry.move;
+                exp->value = (Value)entry.value;
+                exp->depth = (Depth)entry.depth;
+                exp->count = 1;
+
+                return true;
+            }
+        };
+    }
+
+    ////////////////////////////////////////////////////////////////
+    // V2
+    ////////////////////////////////////////////////////////////////
+    namespace V2
+    {
+        const string ExperienceSignature = "SugaR Experience version 2";
+        const int    ExperienceVersion = 2;
+
+        class ExperienceReader : public Experience::ExperienceReader
+        {
+        public:
+            explicit ExperienceReader() {}
+
+        public:
+            virtual int get_version()
+            {
+                return ExperienceVersion;
+            }
+
+            virtual bool check_signature(ifstream& input, size_t inputLength)
+            {
+                return check_signature_set_count(input, inputLength, ExperienceSignature, sizeof(ExpEntry));
+            }
+
+            virtual bool read(ifstream& input, Current::ExpEntry* exp)
+            {
+                assert(match && input.is_open());
+
+                if (!input.read((char*)exp, sizeof(ExpEntry)))
+                    return false;
+
+                return true;
+            }
+        };
+    }
+
+    ////////////////////////////////////////////////////////////////
+    // Typedefs
+    ////////////////////////////////////////////////////////////////
     typedef SugaRKeyMap<ExpEntryEx*> ExpMap;
     typedef SugaRKeyMap<ExpEntryEx*>::iterator ExpIterator;
     typedef SugaRKeyMap<ExpEntryEx*>::const_iterator ExpConstIterator;
 
+    ////////////////////////////////////////////////////////////////
+    // ExpEntryEx::quality
+    ////////////////////////////////////////////////////////////////
+    pair<int, bool> ExpEntryEx::quality(Stockfish::Position& pos, int evalImportance) const
+    {
+        const int QualityExperienceMovesAhead = 10;
+        const int QualityEvalImportanceMax = 10;
+
+        assert(evalImportance >= 0 && evalImportance <= QualityEvalImportanceMax);
+
+        //Draw detection
+        bool maybeDraw = false;
+
+        //Quality based on move count
+        int q = count * (QualityEvalImportanceMax - evalImportance);
+
+        //Quality based on difference in evaluation
+        if (evalImportance)
+        {
+            Color us = pos.side_to_move();
+            Color them = ~us;
+
+            //Calculate quality based on evaluation improvement of next moves
+            vector<Move> moves; //Used for doing/undoing of experience moves
+            StateInfo states[QualityExperienceMovesAhead];
+
+            int64_t sum[COLOR_NB] = { 0, 0 };
+            int64_t weight[COLOR_NB] = { 0, 0 };
+
+            //Start our sum/weight with something positive!
+            sum[us] = count;
+            weight[us] = 1;
+
+            //Look ahead
+            Color me = us;
+            const ExpEntryEx* lastExp[COLOR_NB] = { nullptr, nullptr };
+            const ExpEntryEx* temp1 = this;
+            while (true)
+            {
+                //To be used later
+                lastExp[me] = temp1;
+
+                //Do the move
+                moves.emplace_back(temp1->move);
+                pos.do_move(moves.back(), states[moves.size() - 1]);
+                me = ~me;
+
+                if (!maybeDraw)
+                    maybeDraw = pos.is_draw(pos.game_ply());
+
+                if (moves.size() >= QualityExperienceMovesAhead)
+                    break;
+
+                //Probe the new position
+                temp1 = probe(pos.key());
+                if (!temp1)
+                    break;
+
+                //Find best next experience move (shallow search)
+                const ExpEntryEx* temp2 = temp1 ? temp1->next : nullptr;
+                while (temp2)
+                {
+                    if (temp2->compare(temp1) > 0)
+                        temp1 = temp2;
+
+                    temp2 = temp2->next;
+                }
+
+                if (lastExp[me])
+                {
+                    sum[me] += (int64_t)(temp1->value - lastExp[me]->value);
+                    ++weight[me];
+                }
+            }
+
+            //Undo moves
+            for (auto it = moves.rbegin(); it != moves.rend(); ++it)
+                pos.undo_move(*it);
+
+            //Calculate quality
+            int64_t s = 0;
+            int64_t w = 0;
+
+            if (weight[us]) //Will always be true since weight[us] is initialized to 1 earlier
+            {
+                s += sum[us];
+                w += weight[us];
+            }
+
+            if (weight[them])
+            {
+                s -= sum[them];
+                w += weight[them];
+            }
+
+            q += s * evalImportance / w;
+        }
+        else
+        {
+            //Shallow draw detection when 'evalImportance' is zero!
+            StateInfo st;
+            pos.do_move(move, st);
+            maybeDraw = pos.is_draw(pos.game_ply());
+            pos.undo_move(move);
+        }
+
+        return pair<int, bool>(q / QualityEvalImportanceMax, maybeDraw);
+    }
+
+    //Experience data
     namespace
     {
-        const char *ExperienceSignature = "SugaR";
-        const size_t ExperienceSignatureLength = strlen(ExperienceSignature) * sizeof(char);
-
 #ifndef NDEBUG
         constexpr size_t WriteBufferSize = 1024;
 #else
@@ -112,19 +392,21 @@ namespace Experience
         class ExperienceData
         {
         private:
-            string                  _filename;
-            vector<ExpEntryEx*>     _expExData;
+            string              _filename;
 
-            ExpMap                  _mainExp;
-            vector<ExpEntry*>       _newPvExp;
-            vector<ExpEntry*>       _newMultiPvExp;
+            vector<ExpEntryEx*> _expData;
+            vector<ExpEntryEx*> _newPvExp;
+            vector<ExpEntryEx*> _newMultiPvExp;
+            vector<ExpEntryEx*> _oldExpData;
 
-            bool                    _loading;
-            atomic<bool>            _abortLoading;      //Only used when destructing
-            atomic<bool>            _loadingResult;
-            thread                 *_loaderThread;
-            condition_variable      _loadingCond;
-            mutex                   _loaderMutex;
+            ExpMap              _mainExp;
+
+            bool                _loading;
+            atomic<bool>        _abortLoading;
+            atomic<bool>        _loadingResult;
+            thread              *_loaderThread;
+            condition_variable  _loadingCond;
+            mutex               _loaderMutex;
 
         private:
             void clear()
@@ -134,79 +416,80 @@ namespace Experience
                 wait_for_load_finished();
                 assert(_loaderThread == nullptr);
 
-                //Free
-                for (ExpEntryEx *&p : _expExData)
+                //Clear new exp (this will also flush all new experience data to '_oldExpData' which we will delete later in this function
+                clear_new_exp();
+
+                //Free main exp data
+                for (ExpEntryEx *&p : _expData)
                     free(p);
+
+                //Delete previous game experience data
+                for (ExpEntryEx*& p : _oldExpData)
+                    delete p;
 
                 //Clear
                 _mainExp.clear();
-                _expExData.clear();
-
-                //Clear new exp
-                clear_new_exp();
+                _oldExpData.clear();
+                _expData.clear();
             }
 
             void clear_new_exp()
             {
-                //Delete PV experience
-                for (const ExpEntry* exp : _newPvExp)
-                    delete exp;
+                //Copy exp data to another buffer to be deleted when the whole object is destroyed or new exp file is loaded
+                for (auto& newExp : { _newPvExp, _newMultiPvExp })
+                    std::copy(newExp.begin(), newExp.end(), back_inserter(_oldExpData));
 
-                //Delete NonPV experience
-                for (const ExpEntry* exp : _newMultiPvExp)
-                    delete exp;
-                
                 //Clear vectors
                 _newPvExp.clear();
                 _newMultiPvExp.clear();
             }
 
-            bool link_entry(ExpEntryEx *expEx)
+            bool link_entry(ExpEntryEx* exp)
             {
-                ExpIterator itr = _mainExp.find(expEx->key);
+                ExpIterator itr = _mainExp.find(exp->key);
 
                 //If new entry: insert into map and continue
                 if (itr == _mainExp.end())
                 {
-                    _mainExp[expEx->key] = expEx;
+                    _mainExp[exp->key] = exp;
                     return true;
                 }
 
                 //If existing entry and same move exists then merge
-                ExpEntryEx* expEx2 = itr->second->find(expEx->move);
-                if (expEx2)
+                ExpEntryEx* exp2 = itr->second->find(exp->move);
+                if (exp2)
                 {
-                    expEx2->merge(expEx);
+                    exp2->merge(exp);
                     return false;
                 }
 
-                //If existing entry and different move then insert sorted based on depth/value
-                expEx2 = itr->second;
+                //If existing entry and different move then insert sorted based on pseudo-quality
+                exp2 = itr->second;
                 do
                 {
-                    if (expEx->compare(expEx2) > 0)
+                    if (exp->compare(exp2) > 0)
                     {
-                        if (expEx2 == itr->second)
+                        if (exp2 == itr->second)
                         {
-                            itr->second = expEx;
-                            expEx->next = expEx2;
+                            itr->second = exp;
+                            exp->next = exp2;
                         }
                         else
                         {
-                            expEx->next = expEx2->next;
-                            expEx2->next = expEx;
+                            exp->next = exp2->next;
+                            exp2->next = exp;
                         }
 
                         return true;
                     }
 
-                    if (!expEx2->next)
+                    if (!exp2->next)
                     {
-                        expEx2->next = expEx;
+                        exp2->next = exp;
                         return true;
                     }
 
-                    expEx2 = expEx2->next;
+                    exp2 = exp2->next;
                 } while (true);
 
                 //Should never reach here!
@@ -230,47 +513,66 @@ namespace Experience
                     return false;
                 }
 
-                size_t expDataSize = inSize - ExperienceSignatureLength;
-                size_t expCount = expDataSize / sizeof(ExpEntry);
-                if (expCount * sizeof(ExpEntry) != expDataSize)
+                //Define readers
+                //Order should be from most recent to oldest
+                class ExpReaders
                 {
-                    sync_cout << "info string Experience file [" << fn << "] is corrupted. Size: " << inSize << ", exp-size: " << expDataSize << ", exp-count: " << expCount << sync_endl;
+                public:
+                    vector<pair<const char*, ExperienceReader*>> readers;
+
+                public:
+                    ExpReaders()
+                    {
+                        readers.emplace_back("Experience (V2) reader", new V2::ExperienceReader());
+                        readers.emplace_back("Experience (V1) reader", new V1::ExperienceReader());
+
+#ifndef NDEBUG
+                        int latest = 0;
+                        for (auto& rp : readers)
+                            latest += rp.second->get_version() == Current::ExperienceVersion ? 1 : 0;
+
+                        assert(latest == 1);
+#endif
+                    }
+
+                    ~ExpReaders()
+                    {
+                        for (auto rp : readers)
+                            delete rp.second;
+                    }
+                }expReaders;
+
+                ExperienceReader *reader = nullptr;
+                for (auto &rp : expReaders.readers)
+                {
+                    if (!rp.second)
+                    {
+                        sync_cout << "info string Could not allocate memory for " << rp.first << sync_endl;
+                        continue;
+                    }
+
+                    if (rp.second->check_signature(in, inSize))
+                    {
+                        reader = rp.second;
+                        break;
+                    }
+                }
+
+                if (!reader)
+                {
+                    sync_cout << "info string The file [" << fn << "] is not a valid experience file" << sync_endl;
                     return false;
                 }
 
-                //Seek to beginning of file
-                in.seekg(ios::beg);
+                if (reader->get_version() != Current::ExperienceVersion)
+                    sync_cout << "info string Importing experience version (" << reader->get_version() << ") from file [" << fn << "]" << sync_endl;
 
-                //Check signature
-                char* sig = (char*)malloc(ExperienceSignatureLength);
-                if (!sig)
-                {
-                    sync_cout << "info string Failed to allocate " << ExperienceSignatureLength << " bytes for experience signature verification" << sync_endl;
-                    return false;
-                }
-
-                if (!in.read(sig, ExperienceSignatureLength))
-                {
-                    sync_cout << "info string Failed to read " << ExperienceSignatureLength << " bytes for experience signature verification" << sync_endl;
-                    return false;
-                }
-
-                if (memcmp(sig, ExperienceSignature, ExperienceSignatureLength) != 0)
-                {
-                    free(sig);
-
-                    sync_cout << "info string Experience file [" << fn << "] signature missmatch " << sync_endl;
-                    return false;
-                }
-
-                //Free signature memory
-                free(sig);
-
-                //Allocate buffer for ExpEx data
+                //Allocate buffer for ExpEntryEx data
+                size_t expCount = reader->entries_count();
                 ExpEntryEx* expData = (ExpEntryEx*)malloc(expCount * sizeof(ExpEntryEx));
                 if (!expData)
                 {
-                    sync_cout << "info string Failed to allocate " << expCount * sizeof(ExpEntryEx) << " bytes for stored experience data from file [" << fn << "]" << sync_endl;
+                    sync_cout << "info string Failed to allocate " << expCount * sizeof(ExpEntryEx) << " bytes for experience data from file [" << fn << "]" << sync_endl;
                     return false;
                 }
 
@@ -279,33 +581,46 @@ namespace Experience
 
                 //Load experience entries
                 size_t duplicateMoves = 0;
-                for (size_t i = 0; i < expCount; i++)
+                ExpEntryEx *exp = expData;
+                for (size_t i = 0; i < expCount; ++i, ++exp)
                 {
                     if (_abortLoading.load(memory_order_relaxed))
                         break;
 
                     //Prepare to read
-                    ExpEntryEx* expEx = expData + i;
-                    expEx->next = nullptr;
+                    exp->next = nullptr;
 
                     //Read
-                    if (!in.read((char*)expEx, sizeof(ExpEntry)))
+                    if (!reader->read(in, exp))
                     {
-                        free(expData);
+                        sync_cout << "info string Failed to read experience entry #" << i + 1 << " of " << expCount << sync_endl;
 
-                        sync_cout << "info string Failed to read " << sizeof(ExpEntryEx) << " bytes of experience entry " << i + 1 << " of " << expCount << sync_endl;
+                        delete expData;
                         return false;
                     }
 
                     //Merge
-                    if (!link_entry(expEx))
+                    if (!link_entry(exp))
                         duplicateMoves++;
                 }
 
-                //Add buffer to vector so that it will be released later
-                _expExData.push_back(expData);
+                //Close input file
+                in.close();
 
-                //Nothing to do if loading was aborted
+                //Add buffer to vector so that it will be released later
+                _expData.push_back(expData);
+
+                //Stop if aborted
+                if (_abortLoading.load(memory_order_relaxed))
+                    return false;
+
+                if (reader->get_version() != Current::ExperienceVersion)
+                {
+                    sync_cout << "info string Upgrading experience file (" << fn << ") from version (" << reader->get_version() << ") to version (" << Current::ExperienceVersion << ")" << sync_endl;
+                    save(fn, true, true);
+                }
+
+                //Stop if aborted
                 if (_abortLoading.load(memory_order_relaxed))
                     return false;
 
@@ -350,7 +665,8 @@ namespace Experience
                 {
                     out.seekp(0, out.beg);
 
-                    if (!out.write(ExperienceSignature, ExperienceSignatureLength))
+                    out << Current::ExperienceSignature;
+                    if (!out)
                     {
                         sync_cout << "info string Failed to write signature to experience file [" << fn << "]" << sync_endl;
                         return false;
@@ -363,12 +679,12 @@ namespace Experience
                 vector<char> writeBuffer;
                 writeBuffer.reserve(WriteBufferSize);
 
-                auto write_entry = [&](const ExpEntry* exp, bool force) -> bool
+                auto write_entry = [&](const Current::ExpEntry* exp, bool force) -> bool
                 {
                     if (exp)
                     {
                         const char* data = reinterpret_cast<const char*>(exp);
-                        writeBuffer.insert(writeBuffer.end(), data, data + sizeof(ExpEntry));
+                        writeBuffer.insert(writeBuffer.end(), data, data + sizeof(Current::ExpEntry));
                     }
 
                     bool success = true;
@@ -388,65 +704,73 @@ namespace Experience
                 size_t allPositions = 0;
                 if (saveAll)
                 {
-                    const ExpEntryEx* p = nullptr;
-                    for (const auto& x : _mainExp)
+                    for (ExpEntryEx* expEx : _newPvExp)
+                        link_entry(expEx);
+
+                    for (ExpEntryEx* expEx : _newMultiPvExp)
+                        link_entry(expEx);
+
+                    ExpEntryEx* exp = nullptr;
+                    for (auto& x : _mainExp)
                     {
                         allPositions++;
-                        p = x.second;
+                        exp = x.second;
 
-                        while (p)
+                        //Scale counts
+                        uint16_t maxCount = numeric_limits<uint8_t>::min();
+                        ExpEntryEx* exp1 = exp;
+                        while (exp1)
                         {
-                            if (p->depth >= MIN_EXP_DEPTH)
+                            maxCount = max(maxCount, exp1->count);
+                            exp1 = exp1->next;
+                        }
+
+                        //Scale down
+                        uint16_t scale = 1 + maxCount / 128;
+                        exp1 = exp;
+                        while (exp1)
+                        {
+                            exp1->count = max(exp1->count / scale, 1);
+                            exp1 = exp1->next;
+                        }
+
+                        //Save
+                        while (exp)
+                        {
+                            if (exp->depth >= EXP_MIN_DEPTH)
                             {
                                 allMoves++;
-                                if (!write_entry(p, false))
+                                if (!write_entry(exp, false))
                                 {
                                     sync_cout << "info string Failed to save experience entry to experience file [" << fn << "]" << sync_endl;
                                     return false;
                                 }
                             }
 
-                            p = p->next;
+                            exp = exp->next;
                         }
                     }
+
+                    sync_cout << "info string Saved " << allPositions << " position(s) and " << allMoves << " moves to experience file: " << fn << sync_endl;
                 }
-
-                //Save new PV experience
-                int newPvExpCount = 0;
-                for (const ExpEntry* e : _newPvExp)
+                else
                 {
-                    if (!e)
-                        continue;
-
-                    if (e->depth < MIN_EXP_DEPTH)
-                        continue;
-
-                    if (!write_entry(e, false))
+                    for (auto &newExp : { _newPvExp, _newMultiPvExp })
                     {
-                        sync_cout << "info string Failed to save new PV experience entry to experience file [" << fn << "]" << sync_endl;
-                        return false;
+                        for (const ExpEntryEx* exp : newExp)
+                        {
+                            if (exp->depth < EXP_MIN_DEPTH)
+                                continue;
+
+                            if (!write_entry(exp, false))
+                            {
+                                sync_cout << "info string Failed to save experience entry to experience file [" << fn << "]" << sync_endl;
+                                return false;
+                            }
+                        }
                     }
 
-                    newPvExpCount++;
-                }
-
-                //Save new MultiPV experience
-                int newMultiPvExpCount = 0;
-                for (const ExpEntry* e : _newMultiPvExp)
-                {
-                    if (!e)
-                        continue;
-
-                    if (e->depth < MIN_EXP_DEPTH)
-                        continue;
-
-                    if (!write_entry(e, false))
-                    {
-                        sync_cout << "info string Failed to save new MultiPV experience entry to experience file [" << fn << "]" << sync_endl;
-                        return false;
-                    }
-
-                    newMultiPvExpCount++;
+                    sync_cout << "info string Saved " << _newPvExp.size() << " PV and " << _newMultiPvExp.size() << " MultiPV entries to experience file: " << fn << sync_endl;
                 }
 
                 //Flush buffer
@@ -454,15 +778,6 @@ namespace Experience
 
                 //Clear new moves
                 clear_new_exp();
-
-                if (saveAll)
-                {
-                    sync_cout << "info string Saved " << allPositions << " position(s) and " << allMoves << " moves to experience file: " << fn << sync_endl;
-                }
-                else
-                {
-                    sync_cout << "info string Saved " << newPvExpCount << " PV and " << newMultiPvExpCount << " MultiPV entries to experience file: " << fn << sync_endl;
-                }
 
                 return true;
             }
@@ -480,6 +795,8 @@ namespace Experience
             {
                 clear();
             }
+
+        public:
 
             string filename() const
             {
@@ -510,6 +827,11 @@ namespace Experience
                             bool loadingResult = _load(filename);
                             _loadingResult.store(loadingResult, memory_order_relaxed);
 
+                            //Copy pointer of loader thread so that we can
+                            //clear the variable now and and deleted later
+                            thread *t = _loaderThread;
+                            _loaderThread = nullptr;
+
                             //Notify
                             {
                                 lock_guard<mutex> lg2(_loaderMutex);
@@ -517,10 +839,9 @@ namespace Experience
                                 _loadingCond.notify_one();
                             }
                             
-                            //Detach and delete thread
-                            _loaderThread->detach();
-                            delete _loaderThread;
-                            _loaderThread = nullptr;
+                            //Detach and delete loader thread
+                            t->detach();
+                            delete t;
                         }));
                 }
 
@@ -539,10 +860,11 @@ namespace Experience
                 return _loadingResult.load(memory_order_relaxed);
             }
 
-            void save(string fn, bool saveAll)
+            void save(string fn, bool saveAll, bool ignoreLoadingCheck)
             {
                 //Make sure we are not already in the process of loading same/other experience file
-                wait_for_load_finished();
+                if(!ignoreLoadingCheck)
+                    wait_for_load_finished();
 
                 if (!has_new_exp() && (!saveAll || _mainExp.size() == 0))
                     return;
@@ -593,7 +915,7 @@ namespace Experience
                 }
             }
 
-            const ExpEntryEx* probe(Key k)
+            const ExpEntryEx* probe(Key k) const
             {
                 ExpConstIterator itr = _mainExp.find(k);
                 if (itr == _mainExp.end())
@@ -606,149 +928,30 @@ namespace Experience
 
             void add_pv_experience(Key k, Move m, Value v, Depth d)
             {
-                _newPvExp.emplace_back(new ExpEntry(k, m, v, d));
+                ExpEntryEx* exp = new ExpEntryEx(k, m, v, d, 1);
+
+                if (exp)
+                {
+                    _newPvExp.emplace_back(exp);
+                    link_entry(exp);
+                }
             }
 
             void add_multipv_experience(Key k, Move m, Value v, Depth d)
             {
-                _newMultiPvExp.emplace_back(new ExpEntry(k, m, v, d));
+                ExpEntryEx* exp = new ExpEntryEx(k, m, v, d, 1);
+
+                if (exp)
+                {
+                    _newMultiPvExp.emplace_back(exp);
+                    link_entry(exp);
+                }
             }
         };
 
         ExperienceData*currentExperience = nullptr;
         bool experienceEnabled = true;
         bool learningPaused = false;
-    }
-
-    ////////////////////////////////////////////////////////////////
-    // struct ExpEntry
-    ////////////////////////////////////////////////////////////////
-    ExpEntry::ExpEntry(Stockfish::Key k, Stockfish::Move m, Stockfish::Value v, Stockfish::Depth d)
-    {
-        key = k;
-        move = m;
-        value = v;
-        depth = d;
-        padding[0] = padding[2] = 0x00;
-        padding[1] = padding[3] = 0xFF;
-    }
-
-    int ExpEntry::compare(const ExpEntry* exp) const
-    {
-        int v = value * (depth / 5) - exp->value * (exp->depth / 5);
-        if (!v)
-            v = depth - exp->depth;
-
-        return v;
-    }
-
-    void ExpEntry::merge(const ExpEntry* exp)
-    {
-        assert(key == exp->key);
-        assert(move == exp->move);
-
-        if (depth > exp->depth)
-            return;
-
-        if (depth == exp->depth)
-        {
-            value = (value + exp->value) / 2;
-        }
-        else
-        {
-            value = exp->value;
-            depth = exp->depth;
-        }
-    }
-
-    ////////////////////////////////////////////////////////////////
-    // struct ExpEntryEx
-    ////////////////////////////////////////////////////////////////
-    ExpEntryEx* ExpEntryEx::find(Stockfish::Move m)
-    {
-        ExpEntryEx* expEx = this;
-        do
-        {
-            if (expEx->move == m)
-                return expEx;
-
-            expEx = expEx->next;
-        } while (expEx);
-
-        return nullptr;
-    }
-
-    pair<Value, bool> ExpEntryEx::quality(Position &pos) const
-    {
-        const int QualityExperienceMovesAhead = 10;
-
-        Color us = pos.side_to_move();
-        Color them = ~us;
-        bool maybeDraw = false;
-
-        //Calculate quality based on evaluation improvement of next moves
-        vector<Move> moves; //Used for doing/undoing of experience moves
-        StateInfo states[QualityExperienceMovesAhead];
-
-        int multiplier[COLOR_NB]      = { 1, 1 };
-        int64_t valueSum[COLOR_NB]    = { 0, 0 };
-        int64_t valueWeight[COLOR_NB] = { 0, 0 };
-        Value lastValue[COLOR_NB]     = { VALUE_NONE, VALUE_NONE };
-        Color me = us;
-
-        const ExpEntryEx* temp1 = this;
-        do
-        {
-            //To be used later
-            lastValue[me] = temp1->value;
-
-            //Do the move
-            moves.emplace_back(temp1->move);
-            pos.do_move(moves.back(), states[moves.size() - 1]);
-            me = ~me;
-
-            if (!maybeDraw)
-                maybeDraw = pos.is_draw(pos.game_ply());
-
-            //Probe the new position
-            temp1 = probe(pos.key());
-
-            //Find best next experience move (shallow search)
-            const ExpEntryEx* temp2 = temp1 ? temp1->next : nullptr;
-            while (temp2)
-            {
-                if (temp2->compare(temp1) > 0)
-                    temp1 = temp2;
-
-                temp2 = temp2->next;
-            }
-
-            if (!temp1)
-                break;
-
-            //Calculate quality based on difference in evaluation, also update valueWeight and multiplier
-            if (lastValue[me] != VALUE_NONE)
-            {
-                valueSum[me]     += (temp1->value - lastValue[me]) * multiplier[me];
-                valueWeight[me]  += multiplier[me];
-                //++multiplier[me];
-            }
-        }while(moves.size() < QualityExperienceMovesAhead);
-
-        //Undo moves
-        for (auto it = moves.rbegin(); it != moves.rend(); ++it)
-            pos.undo_move(*it);
-        
-        //Calculate move quality
-        Value q = VALUE_NONE;
-        if (moves.size() >= 3)
-        {
-            q = value + Value(valueSum[us] / valueWeight[us]);
-            if (moves.size() >= 4)
-                q -= Value(valueSum[them] / valueWeight[them]);
-        }
-
-        return pair<Value, bool>(q, maybeDraw);
     }
 
     ////////////////////////////////////////////////////////////////
@@ -795,15 +998,7 @@ namespace Experience
         if (!currentExperience || !currentExperience->has_new_exp() || (bool)Options["Experience Readonly"])
             return;
 
-        currentExperience->save(currentExperience->filename(), false);
-    }
-
-    void reload()
-    {
-        if (!currentExperience || !currentExperience->has_new_exp())
-            return;
-
-        init();
+        currentExperience->save(currentExperience->filename(), false, false);
     }
 
     const ExpEntryEx* probe(Key k)
@@ -856,7 +1051,7 @@ namespace Experience
             return;
 
         //Save
-        exp.save(filename, true);
+        exp.save(filename, true, false);
     }
 
     //Merge command:
@@ -902,7 +1097,7 @@ namespace Experience
         for (const string& fn : filenames)
             exp.load(fn, true);
 
-        exp.save(targetFilename, true);
+        exp.save(targetFilename, true, false);
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -937,8 +1132,8 @@ namespace Experience
         string outputPath = Utility::unquote(argv[1]);
         int maxPly     = argc >= 3 ? atoi(argv[2])        : 1000;
         Value maxValue = argc >= 4 ? (Value)atoi(argv[3]) : (Value)VALUE_MATE;
-        Depth minDepth = argc >= 5 ? std::max((Depth)atoi(argv[4]), MIN_EXP_DEPTH) : MIN_EXP_DEPTH;
-        Depth maxDepth = argc >= 6 ? std::max((Depth)atoi(argv[5]), MIN_EXP_DEPTH) : (Depth)MAX_PLY;
+        Depth minDepth = argc >= 5 ? max((Depth)atoi(argv[4]), EXP_MIN_DEPTH) : EXP_MIN_DEPTH;
+        Depth maxDepth = argc >= 6 ? max((Depth)atoi(argv[5]), EXP_MIN_DEPTH) : (Depth)MAX_PLY;
 
         sync_cout                                         << endl
                   << "Building experience from PGN: "     << endl
@@ -1027,7 +1222,7 @@ namespace Experience
         //If the output file is a new file, then we need to write the signature
         if (globalConversionData.outputStreamBase == 0)
         {
-            globalConversionData.outputStream.write(ExperienceSignature, ExperienceSignatureLength);
+            globalConversionData.outputStream << Current::ExperienceSignature.c_str();
             globalConversionData.outputStreamBase = globalConversionData.outputStream.tellp();
         }
 
@@ -1123,7 +1318,7 @@ namespace Experience
             //////////////////////////////////////////////////////////////////
             // Read moves
             int gamePly = 0;
-            ExpEntry tempExp((Key)0, MOVE_NONE, VALUE_NONE, DEPTH_NONE);
+            Current::ExpEntry tempExp((Key)0, MOVE_NONE, VALUE_NONE, DEPTH_NONE);
             vector<char> tempBuffer;
             for (size_t i = 2; i < tokens.size(); ++i)
             {
@@ -1349,7 +1544,7 @@ namespace Experience
                 return;
 
             //Save
-            exp.save(outputPath, true);
+            exp.save(outputPath, true, false);
         }
     }
 
@@ -1368,12 +1563,12 @@ namespace Experience
             return;
         }
 
-        vector<pair<const ExpEntryEx*, Value>> quality;
-
+        int evalImportance = (int)Options["Experience Book Eval Importance"];
+        vector<pair<const ExpEntryEx*, int>> quality;
         const ExpEntryEx* temp = expEx;
         while (temp)
         {
-            quality.emplace_back(temp, temp->quality(pos).first);
+            quality.emplace_back(temp, temp->quality(pos, evalImportance).first);
             temp = temp->next;
         }
 
@@ -1381,29 +1576,25 @@ namespace Experience
         stable_sort(
             quality.begin(),
             quality.end(),
-            [](const pair<const ExpEntryEx*, Value> &a, const pair<const ExpEntryEx*, Value> &b)
+            [](const pair<const ExpEntryEx*, int> &a, const pair<const ExpEntryEx*, int> &b)
             {
-                if (a.second == VALUE_NONE)
-                    return false;
-
-                if (b.second == VALUE_NONE)
-                    return true;
-
                 return a.second > b.second;
             });
 
         cout << endl;
         int expCount = 0;
-        for(const pair<const ExpEntryEx*, Value>& pr : quality)
+        for(const pair<const ExpEntryEx*, int>& pr : quality)
         {
             cout
-                << setw(2) << setfill(' ') << left << ++expCount << ": "
-                << setw(5) << setfill(' ') << left << UCI::move(pr.first->move, pos.is_chess960())
+                << setw(2)     << setfill(' ')            << left << ++expCount << ": "
+                << setw(5)     << setfill(' ')            << left << UCI::move(pr.first->move, pos.is_chess960())
                 << ", depth: " << setw(2) << setfill(' ') << left << pr.first->depth
-                << ", eval: " << setw(6) << setfill(' ') << left << UCI::value(pr.first->value, pr.first->value);
+                << ", eval: "  << setw(6) << setfill(' ') << left << UCI::value(pr.first->value, pr.first->value);
 
             if (extended)
             {
+                cout << ", count: " << setw(6) << setfill(' ') << left << pr.first->count;
+
                 if(pr.second != VALUE_NONE)
                     cout << ", quality: " << setw(6) << setfill(' ') << left << pr.second;
                 else

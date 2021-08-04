@@ -1,13 +1,13 @@
 /*
-  SugaR, a UCI chess playing engine derived from Stockfish
+  Stockfish, a UCI chess playing engine derived from Glaurung 2.1
   Copyright (C) 2004-2021 The Stockfish developers (see AUTHORS file)
 
-  SugaR is free software: you can redistribute it and/or modify
+  Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  SugaR is distributed in the hope that it will be useful,
+  Stockfish is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
@@ -30,7 +30,6 @@ namespace Stockfish {
 
 bool Tune::update_on_last;
 const UCI::Option* LastOption = nullptr;
-BoolConditions Conditions;
 static std::map<std::string, int> TuneResults;
 
 string Tune::next(string& names, bool pop) {
@@ -109,24 +108,6 @@ template<> void Tune::Entry<Score>::read_option() {
 // Instead of a variable here we have a PostUpdate function: just call it
 template<> void Tune::Entry<Tune::PostUpdate>::init_option() {}
 template<> void Tune::Entry<Tune::PostUpdate>::read_option() { value(); }
-
-
-// Set binary conditions according to a probability that depends
-// on the corresponding parameter value.
-
-void BoolConditions::set() {
-
-  static PRNG rng(now());
-  static bool startup = true; // To workaround fishtest bench
-
-  for (size_t i = 0; i < binary.size(); i++)
-      binary[i] = !startup && (values[i] + int(rng.rand<unsigned>() % variance) > threshold);
-
-  startup = false;
-
-  for (size_t i = 0; i < binary.size(); i++)
-      sync_cout << binary[i] << sync_endl;
-}
 
 } // namespace Stockfish
 

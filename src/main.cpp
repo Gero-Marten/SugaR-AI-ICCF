@@ -30,7 +30,6 @@
 #include "tt.h"
 #include "uci.h"
 #include "experience.h"
-#include "syzygy/tbprobe.h"
 
 using namespace Stockfish;
 
