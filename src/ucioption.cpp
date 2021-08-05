@@ -113,6 +113,7 @@ void init(OptionsMap& o) {
   o["Experience Book Min Depth"]       << Option(27, EXP_MIN_DEPTH, 64);
   o["Experience Book Max Moves"]       << Option(16, 1, 100);
   o["Variety"]                         << Option(0, 0, 40);
+  o["Use NNUE"]                        << Option(true, on_use_NNUE);
   o["EvalFile"]                        << Option(EvalFileDefaultName, on_eval_file);
 }
 
