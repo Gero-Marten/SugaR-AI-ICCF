@@ -56,6 +56,8 @@ void on_exp_enabled(const Option& /*o*/) { Experience::init(); }
 void on_exp_file(const Option& /*o*/) { Experience::init(); }
 void on_use_NNUE(const Option& ) { Eval::NNUE::init(); }
 void on_eval_file(const Option& ) { Eval::NNUE::init(); }
+void on_materialistic_evaluation_strategy(const Option& o) { Eval::NNUE::MaterialisticEvaluationStrategy = (int)o; }
+void on_positional_evaluation_strategy(const Option& o) { Eval::NNUE::PositionalEvaluationStrategy = (int)o; }
 
 /// Our case insensitive less() function as required by UCI protocol
 bool CaseInsensitiveLess::operator() (const string& s1, const string& s2) const {
@@ -71,50 +73,52 @@ void init(OptionsMap& o) {
 
   constexpr int MaxHashMB = Is64Bit ? 33554432 : 2048;
 
-  o["Debug Log File"]                  << Option("", on_logger);
-  o["Dynamic Contempt"]                << Option(true);
-  o["Threads"]                         << Option(1, 1, 512, on_threads);
-  o["BruteForceSearch"]                << Option(0, 0, 512, on_full_threads); //if this is used, must be after #Threads is set.
-  o["Hash"]                            << Option(16, 1, MaxHashMB, on_hash_size);
-  o["Clear Hash"]                      << Option(on_clear_hash);
-  o["Clean Search"]                    << Option(false);
-  o["Ponder"]                          << Option(false);
-  o["MultiPV"]                         << Option(1, 1, 500);
-  o["Move Overhead"]                   << Option(10, 0, 5000);
-  o["Slow Mover"]                      << Option(100, 10, 1000);
-  o["nodestime"]                       << Option(0, 0, 10000);
-  o["UCI_Chess960"]                    << Option(false);
-  o["NeverClearHash"]                  << Option(false);
-  o["HashFile"]                        << Option("hash.hsh", on_HashFile);
-  o["SaveHashtoFile"]                  << Option(SaveHashtoFile);
-  o["LoadHashfromFile"]                << Option(LoadHashfromFile);
-  o["LoadEpdToHash"]                   << Option(LoadEpdToHash);
-  o["UCI_AnalyseMode"]                 << Option(false);
-  o["UCI_ShowWDL"]                     << Option(false);
-  o["multiPV Search"]                  << Option(0, 0,  8);
-  o["SyzygyPath"]                      << Option("<empty>", on_tb_path);
-  o["SyzygyProbeDepth"]                << Option(1, 1, 100);
-  o["Syzygy50MoveRule"]                << Option(true);
-  o["SyzygyProbeLimit"]                << Option(7, 0, 7);
-  o["Book1"]                           << Option(false);
-  o["Book1 File"]                      << Option("<empty>", on_book1_file);
-  o["Book1 BestBookMove"]              << Option(true);
-  o["Book1 Depth"]                     << Option(100, 1, 350);
-  o["Book2"]                           << Option(false);
-  o["Book2 File"]                      << Option("<empty>", on_book2_file);
-  o["Book2 BestBookMove"]              << Option(true);
-  o["Book2 Depth"]                     << Option(100, 1, 350);
-  o["Experience Enabled"]              << Option(true, on_exp_enabled);
-  o["Experience File"]                 << Option("SugaR.exp", on_exp_file);
-  o["Experience Readonly"]             << Option(false);
-  o["Experience Book"]                 << Option(false);
-  o["Experience Book Best Move"]       << Option(true);
-  o["Experience Book Eval Importance"] << Option(5, 0, 10);
-  o["Experience Book Min Depth"]       << Option(27, EXP_MIN_DEPTH, 64);
-  o["Experience Book Max Moves"]       << Option(16, 1, 100);
-  o["Variety"]                         << Option(0, 0, 40);
-  o["Use NNUE"]                        << Option(true, on_use_NNUE);
-  o["EvalFile"]                        << Option(EvalFileDefaultName, on_eval_file);
+  o["Debug Log File"]                    << Option("", on_logger);
+  o["Dynamic Contempt"]                  << Option(true);
+  o["Threads"]                           << Option(1, 1, 512, on_threads);
+  o["BruteForceSearch"]                  << Option(0, 0, 512, on_full_threads); //if this is used, must be after #Threads is set.
+  o["Hash"]                              << Option(16, 1, MaxHashMB, on_hash_size);
+  o["Clear Hash"]                        << Option(on_clear_hash);
+  o["Clean Search"]                      << Option(false);
+  o["Ponder"]                            << Option(false);
+  o["MultiPV"]                           << Option(1, 1, 500);
+  o["Move Overhead"]                     << Option(10, 0, 5000);
+  o["Slow Mover"]                        << Option(100, 10, 1000);
+  o["nodestime"]                         << Option(0, 0, 10000);
+  o["UCI_Chess960"]                      << Option(false);
+  o["NeverClearHash"]                    << Option(false);
+  o["HashFile"]                          << Option("hash.hsh", on_HashFile);
+  o["SaveHashtoFile"]                    << Option(SaveHashtoFile);
+  o["LoadHashfromFile"]                  << Option(LoadHashfromFile);
+  o["LoadEpdToHash"]                     << Option(LoadEpdToHash);
+  o["UCI_AnalyseMode"]                   << Option(false);
+  o["UCI_ShowWDL"]                       << Option(false);
+  o["multiPV Search"]                    << Option(0, 0,  8);
+  o["SyzygyPath"]                        << Option("<empty>", on_tb_path);
+  o["SyzygyProbeDepth"]                  << Option(1, 1, 100);
+  o["Syzygy50MoveRule"]                  << Option(true);
+  o["SyzygyProbeLimit"]                  << Option(7, 0, 7);
+  o["Book1"]                             << Option(false);
+  o["Book1 File"]                        << Option("<empty>", on_book1_file);
+  o["Book1 BestBookMove"]                << Option(true);
+  o["Book1 Depth"]                       << Option(100, 1, 350);
+  o["Book2"]                             << Option(false);
+  o["Book2 File"]                        << Option("<empty>", on_book2_file);
+  o["Book2 BestBookMove"]                << Option(true);
+  o["Book2 Depth"]                       << Option(100, 1, 350);
+  o["Experience Enabled"]                << Option(true, on_exp_enabled);
+  o["Experience File"]                   << Option("SugaR.exp", on_exp_file);
+  o["Experience Readonly"]               << Option(false);
+  o["Experience Book"]                   << Option(false);
+  o["Experience Book Best Move"]         << Option(true);
+  o["Experience Book Eval Importance"]   << Option(5, 0, 10);
+  o["Experience Book Min Depth"]         << Option(27, EXP_MIN_DEPTH, 64);
+  o["Experience Book Max Moves"]         << Option(16, 1, 100);
+  o["Variety"]                           << Option(0, 0, 40);
+  o["Use NNUE"]                          << Option(true, on_use_NNUE);
+  o["EvalFile"]                          << Option(EvalFileDefaultName, on_eval_file);
+  o["Materialistic Evaluation Strategy"] << Option(0, -12, 12, on_materialistic_evaluation_strategy);
+  o["Positional Evaluation Strategy"]    << Option(0, -12, 12, on_positional_evaluation_strategy);
 }
 
 
@@ -198,7 +202,7 @@ Option& Option::operator=(const string& v) {
 
   assert(!type.empty());
 
-  if (   (type != "button" && v.empty())
+  if (   (type != "button" && type != "string" && v.empty())
       || (type == "check" && v != "true" && v != "false")
       || (type == "spin" && (stof(v) < min || stof(v) > max)))
       return *this;

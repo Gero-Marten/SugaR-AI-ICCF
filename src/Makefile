@@ -41,7 +41,7 @@ endif
 SRCS = benchmark.cpp bitbase.cpp bitboard.cpp endgame.cpp evaluate.cpp experience.cpp main.cpp \
 	material.cpp misc.cpp movegen.cpp movepick.cpp pawns.cpp polybook.cpp position.cpp psqt.cpp \
 	search.cpp thread.cpp timeman.cpp tt.cpp uci.cpp ucioption.cpp tune.cpp syzygy/tbprobe.cpp \
-	nnue/evaluate_nnue.cpp nnue/features/half_ka_v2.cpp
+	nnue/evaluate_nnue.cpp nnue/features/half_ka_v2_hm.cpp
 
 OBJS = $(notdir $(SRCS:.cpp=.o))
 
@@ -368,7 +368,7 @@ ifeq ($(COMP),mingw)
 		CXX=g++
 	endif
 
-	CXXFLAGS += -Wextra -Wshadow
+	CXXFLAGS += -pedantic -Wextra -Wshadow
 	LDFLAGS += -static
 endif
 
@@ -912,7 +912,7 @@ icc-profile-use:
 	EXTRACXXFLAGS='-prof_use -prof_dir ./profdir' \
 	all
 
-.depend:
+.depend: $(SRCS)
 	-@$(CXX) $(DEPENDFLAGS) -MM $(SRCS) > $@ 2> /dev/null
 
 -include .depend

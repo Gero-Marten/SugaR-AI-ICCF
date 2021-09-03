@@ -97,7 +97,7 @@ public:
 
   // The key is used to get the index of the cluster
   TTEntry* first_entry(const Key key) const {
-    return &table[key & (clusterCount - 1)].entry[0];
+    return &table[(key * (__uint128_t)clusterCount) >> 64].entry[0];
   }
 
 private:

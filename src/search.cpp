@@ -1052,7 +1052,7 @@ namespace {
            assert(eval - beta >= 0);
 
            // Null move dynamic reduction based on depth and value
-           Depth R = (1090 + 81 * depth) / 256 + std::min(int(eval - beta) / 205, 3);
+           Depth R = std::min(int(eval - beta) / 205, 3) + depth / 3 + 4;
 
            if (   depth < 11
                || ttValue >= beta
@@ -1249,7 +1249,7 @@ namespace {
       {
           goto skipExtensionAndPruning;
       }
-      // Step 13. Pruning at shallow depth (~200 Elo)
+      // Step 13. Pruning at shallow depth (~200 Elo). Depth conditions are important for mate finding.
       if (  !PvNode
           && pos.non_pawn_material(us)
           && bestValue > VALUE_TB_LOSS_IN_MAX_PLY)
@@ -1276,23 +1276,20 @@ namespace {
           else
           {
               // Continuation history based pruning (~20 Elo)
-              if (   lmrDepth < 5
-                  && (*contHist[0])[movedPiece][to_sq(move)] < (depth == 1 ? 0 : -stat_bonus(depth-1))
-                  && (*contHist[1])[movedPiece][to_sq(move)] < (depth == 1 ? 0 : -stat_bonus(depth-1)))
+              if (lmrDepth < 5
+                  && (*contHist[0])[movedPiece][to_sq(move)]
+                  + (*contHist[1])[movedPiece][to_sq(move)]
+                  + (*contHist[3])[movedPiece][to_sq(move)] < -3000 * depth + 3000)
                   continue;
 
               // Futility pruning: parent node (~5 Elo)
               if (   lmrDepth < 3
                   && !ss->inCheck
-                  && ss->staticEval + 174 + 157 * lmrDepth <= alpha
-                  &&  (*contHist[0])[movedPiece][to_sq(move)]
-                    + (*contHist[1])[movedPiece][to_sq(move)]
-                    + (*contHist[3])[movedPiece][to_sq(move)]
-                    + (*contHist[5])[movedPiece][to_sq(move)] / 3 < 28255)
+                  && ss->staticEval + 174 + 157 * lmrDepth <= alpha)
                   continue;
 
               // Prune moves with negative SEE (~20 Elo)
-              if (!pos.see_ge(move, Value(-(30 - std::min(lmrDepth, 18)) * lmrDepth * lmrDepth)))
+              if (!pos.see_ge(move, Value(-21 * lmrDepth * (lmrDepth + 1))))
                   continue;
           }
       }
@@ -1453,8 +1450,8 @@ namespace {
 
           // In general we want to cap the LMR depth search at newDepth. But if
           // reductions are really negative and movecount is low, we allow this move
-          // to be searched deeper than the first move, unless ttMove was extended by 2.
-          Depth d = std::clamp(newDepth - r, 1, newDepth + (r < -1 && moveCount <= 5 && !doubleExtension));
+          // to be searched deeper than the first move in specific cases.
+          Depth d = std::clamp(newDepth - r, 1, newDepth + (r < -1 && (moveCount <= 5 || (depth > 6 && PvNode)) && !doubleExtension));
 
           value = -search<NonPV>(pos, ss+1, -(alpha+1), -alpha, d, true);
 
