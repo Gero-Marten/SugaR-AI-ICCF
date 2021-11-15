@@ -63,7 +63,7 @@ namespace Stockfish {
 namespace Eval {
 
   bool useNNUE;
-  string eval_file_loaded = "None";
+  string currentEvalFileName = "None";
   int NNUE::MaterialisticEvaluationStrategy = 0;
   int NNUE::PositionalEvaluationStrategy = 0;
 
@@ -99,13 +99,13 @@ namespace Eval {
 #endif
 
     for (string directory : dirs)
-        if (eval_file_loaded != eval_file)
+        if (currentEvalFileName != eval_file)
         {
             if (directory != "<internal>")
             {
                 ifstream stream(directory + eval_file, ios::binary);
                 if (load_eval(eval_file, stream))
-                    eval_file_loaded = eval_file;
+                    currentEvalFileName = eval_file;
             }
 
             if (directory == "<internal>" && eval_file == EvalFileDefaultName)
@@ -120,7 +120,7 @@ namespace Eval {
 
                 istream stream(&buffer);
                 if (load_eval(eval_file, stream))
-                    eval_file_loaded = eval_file;
+                    currentEvalFileName = eval_file;
             }
         }
   }
@@ -132,7 +132,7 @@ namespace Eval {
     if (eval_file.empty())
         eval_file = EvalFileDefaultName;
 
-    if (useNNUE && eval_file_loaded != eval_file)
+    if (useNNUE && currentEvalFileName != eval_file)
     {
 
         string msg1 = "If the UCI option \"Use NNUE\" is set to true, network evaluation parameters compatible with the engine must be available.";
@@ -997,7 +997,9 @@ namespace {
 
     // Early exit if score is high
     auto lazy_skip = [&](Value lazyThreshold) {
-        return abs(mg_value(score) + eg_value(score)) > lazyThreshold + pos.non_pawn_material() / 32;
+        return abs(mg_value(score) + eg_value(score)) >   lazyThreshold
+                                                        + std::abs(pos.this_thread()->bestValue) * 5 / 4
+                                                        + pos.non_pawn_material() / 32;
     };
 
     if (lazy_skip(LazyThreshold1))
@@ -1057,26 +1059,22 @@ make_v:
 
     if (   pos.piece_on(SQ_A1) == W_BISHOP
         && pos.piece_on(SQ_B2) == W_PAWN)
-        correction += !pos.empty(SQ_B3) ? -CorneredBishop * 4
-                                        : -CorneredBishop * 3;
+        correction -= CorneredBishop;
 
     if (   pos.piece_on(SQ_H1) == W_BISHOP
         && pos.piece_on(SQ_G2) == W_PAWN)
-        correction += !pos.empty(SQ_G3) ? -CorneredBishop * 4
-                                        : -CorneredBishop * 3;
+        correction -= CorneredBishop;
 
     if (   pos.piece_on(SQ_A8) == B_BISHOP
         && pos.piece_on(SQ_B7) == B_PAWN)
-        correction += !pos.empty(SQ_B6) ? CorneredBishop * 4
-                                        : CorneredBishop * 3;
+        correction += CorneredBishop;
 
     if (   pos.piece_on(SQ_H8) == B_BISHOP
         && pos.piece_on(SQ_G7) == B_PAWN)
-        correction += !pos.empty(SQ_G6) ? CorneredBishop * 4
-                                        : CorneredBishop * 3;
+        correction += CorneredBishop;
 
-    return pos.side_to_move() == WHITE ?  Value(correction)
-                                       : -Value(correction);
+    return pos.side_to_move() == WHITE ?  Value(5 * correction)
+                                       : -Value(5 * correction);
   }
 
 } // namespace Eval
@@ -1087,8 +1085,8 @@ make_v:
 
 Value Eval::evaluate(const Position& pos) {
 
-  Value v = Eval::useNNUE ? NNUE::evaluate(pos, true) + (pos.is_chess960() ? fix_FRC(pos) : 0)
-                          : Evaluation<NO_TRACE>(pos).value();
+  Value v = useNNUE ? NNUE::evaluate(pos, true) + (pos.is_chess960() ? fix_FRC(pos) : 0)
+                    : Evaluation<NO_TRACE>(pos).value();
 
   // Guarantee evaluation does not hit the tablebase range
   v = std::clamp(v, VALUE_TB_LOSS_IN_MAX_PLY + 1, VALUE_TB_WIN_IN_MAX_PLY - 1);
@@ -1114,6 +1112,7 @@ std::string Eval::trace(Position& pos) {
   std::memset(scores, 0, sizeof(scores));
 
   pos.this_thread()->trend = SCORE_ZERO; // Reset any dynamic contempt
+  pos.this_thread()->bestValue = VALUE_ZERO; // Reset bestValue for lazyEval
 
   v = Evaluation<TRACE>(pos).value();
 
@@ -1149,7 +1148,7 @@ std::string Eval::trace(Position& pos) {
   ss << "\nClassical evaluation   " << to_cp(v) << " (white side)\n";
   if (Eval::useNNUE)
   {
-      v = NNUE::evaluate(pos, true);
+      v = NNUE::evaluate(pos, false);
       v = pos.side_to_move() == WHITE ? v : -v;
       ss << "NNUE evaluation        " << to_cp(v) << " (white side)\n";
   }
